@@ -42,3 +42,86 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
 
     Ok(tokens)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_char_tokens() {
+        assert_eq!(
+            tokenize("+-*/()"),
+            Ok(vec![
+                Token::Plus,
+                Token::Minus,
+                Token::Star,
+                Token::Slash,
+                Token::LParen,
+                Token::RParen,
+            ])
+        );
+    }
+
+    #[test]
+    fn integers() {
+        assert_eq!(
+            tokenize("0 42 123"),
+            Ok(vec![Token::Int(0), Token::Int(42), Token::Int(123)])
+        );
+    }
+
+    #[test]
+    fn expression() {
+        assert_eq!(
+            tokenize("12 + (3*4)"),
+            Ok(vec![
+                Token::Int(12),
+                Token::Plus,
+                Token::LParen,
+                Token::Int(3),
+                Token::Star,
+                Token::Int(4),
+                Token::RParen,
+            ])
+        );
+    }
+
+    #[test]
+    fn number_followed_by_operator() {
+        assert_eq!(tokenize("123+"), Ok(vec![Token::Int(123), Token::Plus]));
+    }
+
+    #[test]
+    fn skips_whitespace() {
+        assert_eq!(tokenize(" \t\r\n42 "), Ok(vec![Token::Int(42)]));
+    }
+
+    #[test]
+    fn empty_input() {
+        assert_eq!(tokenize(""), Ok(vec![]));
+    }
+
+    #[test]
+    fn max_i64() {
+        assert_eq!(
+            tokenize("9223372036854775807"),
+            Ok(vec![Token::Int(i64::MAX)])
+        );
+    }
+
+    #[test]
+    fn integer_overflow() {
+        assert_eq!(
+            tokenize("9223372036854775808"),
+            Err("integer literal is too large".to_string())
+        );
+    }
+
+    #[test]
+    fn unexpected_character() {
+        assert_eq!(
+            tokenize("1 $ 2"),
+            Err("unexpected character: '$'".to_string())
+        );
+    }
+}
