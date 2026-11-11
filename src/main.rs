@@ -1,6 +1,9 @@
 mod ast;
 mod lexer;
+mod parser;
 
 fn main() {
-    println!("{:?}", lexer::tokenize("12 + (3*4)"));
+    let tokens = lexer::tokenize("((42))").unwrap();
+    let expr = parser::Parser::new(tokens).parse();
+    println!("{expr:?}");
 }
