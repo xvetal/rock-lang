@@ -4,10 +4,14 @@
 
 ### Added
 - Variables: `let x = 1 + 2;` binds a name, `x` reads it
-- A program is a sequence of `let` statements optionally followed by an expression, whose value is printed
+- A program is a sequence of statements optionally followed by an expression, whose value is printed
 - Shadowing: `let x = x + 1;` sees the previous `x`
 - The REPL keeps variables between lines
 - Error for undefined variables
+- Expression statements: `expr;` evaluates and discards the value
+- Function calls: `f(a, b)`
+- Built-in `print(x)` writes a value followed by a newline
+- Unit value `()` returned by `print`
 
 ## [0.2.0] - 2026-11-12
 

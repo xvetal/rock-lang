@@ -9,6 +9,7 @@ pub enum Token {
     Slash,
     Eq,
     Semicolon,
+    Comma,
     LParen,
     RParen,
 }
@@ -26,6 +27,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             '/' => Token::Slash,
             '=' => Token::Eq,
             ';' => Token::Semicolon,
+            ',' => Token::Comma,
             '(' => Token::LParen,
             ')' => Token::RParen,
             '0'..='9' => {
@@ -173,6 +175,21 @@ mod tests {
     #[test]
     fn digit_then_letters() {
         assert_eq!(tokenize("1x"), Ok(vec![Token::Int(1), ident("x")]));
+    }
+
+    #[test]
+    fn call_tokens() {
+        assert_eq!(
+            tokenize("f(x, 1)"),
+            Ok(vec![
+                ident("f"),
+                Token::LParen,
+                ident("x"),
+                Token::Comma,
+                Token::Int(1),
+                Token::RParen,
+            ])
+        );
     }
 
     #[test]

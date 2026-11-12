@@ -111,7 +111,15 @@ impl Parser {
                     i64::try_from(n).map_err(|_| "integer literal is too large".to_string())?;
                 Ok(Expr::Int(value))
             }
-            Some(Token::Ident(name)) => Ok(Expr::Var(name)),
+            Some(Token::Ident(name)) => {
+                if self.peek() == Some(&Token::LParen) {
+                    self.advance();
+                    let args = self.args()?;
+                    Ok(Expr::Call { name, args })
+                } else {
+                    Ok(Expr::Var(name))
+                }
+            }
             Some(Token::LParen) => {
                 let inner = self.expr()?;
                 self.expect(Token::RParen, "')'")?;
@@ -119,6 +127,22 @@ impl Parser {
             }
             Some(token) => Err(format!("unexpected token: {token:?}")),
             None => Err("unexpected end of input".to_string()),
+        }
+    }
+
+    fn args(&mut self) -> Result<Vec<Expr>, String> {
+        let mut args = Vec::new();
+        if self.peek() == Some(&Token::RParen) {
+            self.advance();
+            return Ok(args);
+        }
+        loop {
+            args.push(self.expr()?);
+            match self.advance() {
+                Some(Token::Comma) => {}
+                Some(Token::RParen) => return Ok(args),
+                _ => return Err("expected ',' or ')'".to_string()),
+            }
         }
     }
 
@@ -167,6 +191,13 @@ mod tests {
         Stmt::Let {
             name: name.to_string(),
             value,
+        }
+    }
+
+    fn call(name: &str, args: Vec<Expr>) -> Expr {
+        Expr::Call {
+            name: name.to_string(),
+            args,
         }
     }
 
@@ -288,6 +319,31 @@ mod tests {
     }
 
     #[test]
+    fn call_without_arguments() {
+        assert_eq!(parse("f()"), Ok(call("f", vec![])));
+    }
+
+    #[test]
+    fn call_with_arguments() {
+        assert_eq!(
+            parse("f(1, x + 2)"),
+            Ok(call("f", vec![int(1), bin(Add, var("x"), int(2))]))
+        );
+    }
+
+    #[test]
+    fn call_in_expression() {
+        assert_eq!(
+            parse("1 + f(g(2)) * 3"),
+            Ok(bin(
+                Add,
+                int(1),
+                bin(Mul, call("f", vec![call("g", vec![int(2)])]), int(3))
+            ))
+        );
+    }
+
+    #[test]
     fn empty_program() {
         assert_eq!(
             parse_program(""),
@@ -400,6 +456,21 @@ mod tests {
             parse("-(9223372036854775808)"),
             Err("integer literal is too large".to_string())
         );
+    }
+
+    #[test]
+    fn unclosed_call() {
+        assert_eq!(parse("f(1"), Err("expected ',' or ')'".to_string()));
+    }
+
+    #[test]
+    fn call_arguments_without_comma() {
+        assert_eq!(parse("f(1 2)"), Err("expected ',' or ')'".to_string()));
+    }
+
+    #[test]
+    fn call_trailing_comma() {
+        assert_eq!(parse("f(1,)"), Err("unexpected token: RParen".to_string()));
     }
 
     #[test]

@@ -15,6 +15,10 @@ pub enum UnaryOp {
 pub enum Expr {
     Int(i64),
     Var(String),
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
     Binary {
         op: BinaryOp,
         left: Box<Expr>,

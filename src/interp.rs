@@ -1,16 +1,20 @@
 use std::collections::HashMap;
+use std::io::Write;
 
 use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
 use crate::value::Value;
 
-#[derive(Default)]
-pub struct Interpreter {
+pub struct Interpreter<W: Write> {
     vars: HashMap<String, Value>,
+    out: W,
 }
 
-impl Interpreter {
-    pub fn new() -> Self {
-        Self::default()
+impl<W: Write> Interpreter<W> {
+    pub fn new(out: W) -> Self {
+        Self {
+            vars: HashMap::new(),
+            out,
+        }
     }
 
     pub fn run(&mut self, program: &Program) -> Result<Value, String> {
@@ -31,7 +35,7 @@ impl Interpreter {
         }
     }
 
-    fn eval(&self, expr: &Expr) -> Result<Value, String> {
+    fn eval(&mut self, expr: &Expr) -> Result<Value, String> {
         match expr {
             Expr::Int(n) => Ok(Value::Int(*n)),
             Expr::Var(name) => self
@@ -39,6 +43,13 @@ impl Interpreter {
                 .get(name)
                 .copied()
                 .ok_or_else(|| format!("undefined variable: {name}")),
+            Expr::Call { name, args } => {
+                let args = args
+                    .iter()
+                    .map(|arg| self.eval(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.call(name, &args)
+            }
             Expr::Binary { op, left, right } => {
                 let l = self.eval_int(left)?;
                 let r = self.eval_int(right)?;
@@ -65,7 +76,20 @@ impl Interpreter {
         }
     }
 
-    fn eval_int(&self, expr: &Expr) -> Result<i64, String> {
+    fn call(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        match name {
+            "print" => {
+                let [value] = args else {
+                    return Err(format!("print expects 1 argument, got {}", args.len()));
+                };
+                writeln!(self.out, "{value}").map_err(|e| format!("cannot write output: {e}"))?;
+                Ok(Value::Unit)
+            }
+            _ => Err(format!("undefined function: {name}")),
+        }
+    }
+
+    fn eval_int(&mut self, expr: &Expr) -> Result<i64, String> {
         match self.eval(expr)? {
             Value::Int(n) => Ok(n),
             other => Err(format!("expected integer, got {other}")),
@@ -79,16 +103,22 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::Parser;
 
-    fn exec(interp: &mut Interpreter, input: &str) -> Result<Value, String> {
+    fn exec(interp: &mut Interpreter<Vec<u8>>, input: &str) -> Result<Value, String> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
         interp.run(&program)
     }
 
     fn run(input: &str) -> Result<i64, String> {
-        match exec(&mut Interpreter::new(), input)? {
+        match exec(&mut Interpreter::new(Vec::new()), input)? {
             Value::Int(n) => Ok(n),
             other => panic!("expected integer, got {other}"),
         }
+    }
+
+    fn output(input: &str) -> Result<String, String> {
+        let mut interp = Interpreter::new(Vec::new());
+        exec(&mut interp, input)?;
+        Ok(String::from_utf8(interp.out).unwrap())
     }
 
     #[test]
@@ -168,19 +198,48 @@ mod tests {
 
     #[test]
     fn statements_only() {
-        assert_eq!(exec(&mut Interpreter::new(), "let x = 1;"), Ok(Value::Unit));
+        assert_eq!(
+            exec(&mut Interpreter::new(Vec::new()), "let x = 1;"),
+            Ok(Value::Unit)
+        );
     }
 
     #[test]
     fn variables_persist_between_runs() {
-        let mut interp = Interpreter::new();
+        let mut interp = Interpreter::new(Vec::new());
         assert_eq!(exec(&mut interp, "let x = 2;"), Ok(Value::Unit));
         assert_eq!(exec(&mut interp, "x * 3"), Ok(Value::Int(6)));
     }
 
     #[test]
     fn expression_statement_value_is_discarded() {
-        assert_eq!(exec(&mut Interpreter::new(), "1 + 2;"), Ok(Value::Unit));
+        assert_eq!(
+            exec(&mut Interpreter::new(Vec::new()), "1 + 2;"),
+            Ok(Value::Unit)
+        );
+    }
+
+    #[test]
+    fn print() {
+        assert_eq!(
+            output("let x = 1 + 2 * 3; print(x);"),
+            Ok("7\n".to_string())
+        );
+    }
+
+    #[test]
+    fn print_returns_unit() {
+        assert_eq!(output("print(print(1));"), Ok("1\n()\n".to_string()));
+    }
+
+    #[test]
+    fn output_before_error_is_kept() {
+        let mut interp = Interpreter::new(Vec::new());
+        assert_eq!(
+            exec(&mut interp, "print(1); print(1 / 0);"),
+            Err("division by zero".to_string())
+        );
+        assert_eq!(String::from_utf8(interp.out).unwrap(), "1\n");
     }
 
     #[test]
@@ -199,6 +258,27 @@ mod tests {
     #[test]
     fn expression_statement_error() {
         assert_eq!(run("1 / 0; 2"), Err("division by zero".to_string()));
+    }
+
+    #[test]
+    fn undefined_function() {
+        assert_eq!(run("foo(1)"), Err("undefined function: foo".to_string()));
+    }
+
+    #[test]
+    fn print_wrong_argument_count() {
+        assert_eq!(
+            run("print(1, 2)"),
+            Err("print expects 1 argument, got 2".to_string())
+        );
+    }
+
+    #[test]
+    fn unit_in_arithmetic() {
+        assert_eq!(
+            run("print(1) + 1"),
+            Err("expected integer, got ()".to_string())
+        );
     }
 
     #[test]

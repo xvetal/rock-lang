@@ -30,7 +30,7 @@ fn main() -> ExitCode {
 fn repl() {
     let stdin = io::stdin();
     let mut line = String::new();
-    let mut interp = Interpreter::new();
+    let mut interp = Interpreter::new(io::stdout());
     loop {
         print!("> ");
         io::stdout().flush().expect("stdout should be writable");
@@ -55,7 +55,7 @@ fn repl() {
 
 fn run_file(path: &str) -> Result<Value, String> {
     let source = fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
-    run(&mut Interpreter::new(), &source)
+    run(&mut Interpreter::new(io::stdout()), &source)
 }
 
 fn report(result: Result<Value, String>) -> ExitCode {
@@ -72,7 +72,7 @@ fn report(result: Result<Value, String>) -> ExitCode {
     }
 }
 
-fn run(interp: &mut Interpreter, source: &str) -> Result<Value, String> {
+fn run(interp: &mut Interpreter<io::Stdout>, source: &str) -> Result<Value, String> {
     let tokens = lexer::tokenize(source)?;
     let program = parser::Parser::new(tokens).parse()?;
     interp.run(&program)
