@@ -1,10 +1,14 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Int(u64),
+    Ident(String),
+    Let,
     Plus,
     Minus,
     Star,
     Slash,
+    Eq,
+    Semicolon,
     LParen,
     RParen,
 }
@@ -20,6 +24,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             '-' => Token::Minus,
             '*' => Token::Star,
             '/' => Token::Slash,
+            '=' => Token::Eq,
+            ';' => Token::Semicolon,
             '(' => Token::LParen,
             ')' => Token::RParen,
             '0'..='9' => {
@@ -33,6 +39,20 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                         .ok_or("integer literal is too large")?;
                 }
                 Token::Int(value)
+            }
+            c if c.is_ascii_alphabetic() || c == '_' => {
+                let mut name = String::from(c);
+                while let Some(&d) = chars.peek() {
+                    if !(d.is_ascii_alphanumeric() || d == '_') {
+                        break;
+                    }
+                    name.push(d);
+                    chars.next();
+                }
+                match name.as_str() {
+                    "let" => Token::Let,
+                    _ => Token::Ident(name),
+                }
             }
             _ => return Err(format!("unexpected character: '{c}'")),
         };
@@ -106,6 +126,54 @@ mod tests {
         assert_eq!(
             tokenize("18446744073709551615"),
             Ok(vec![Token::Int(u64::MAX)])
+        );
+    }
+
+    #[test]
+    fn identifiers() {
+        assert_eq!(
+            tokenize("x foo_bar _tmp x1"),
+            Ok(vec![
+                Token::Ident("x".to_string()),
+                Token::Ident("foo_bar".to_string()),
+                Token::Ident("_tmp".to_string()),
+                Token::Ident("x1".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn let_keyword() {
+        assert_eq!(tokenize("let"), Ok(vec![Token::Let]));
+    }
+
+    #[test]
+    fn keyword_prefix_is_identifier() {
+        assert_eq!(
+            tokenize("letter"),
+            Ok(vec![Token::Ident("letter".to_string())])
+        );
+    }
+
+    #[test]
+    fn let_statement() {
+        assert_eq!(
+            tokenize("let x = 1;"),
+            Ok(vec![
+                Token::Let,
+                Token::Ident("x".to_string()),
+                Token::Eq,
+                Token::Int(1),
+                Token::Semicolon,
+            ])
+        );
+    }
+
+    #[test]
+    fn digit_then_letters() {
+        assert_eq!(
+            tokenize("1x"),
+            Ok(vec![Token::Int(1), Token::Ident("x".to_string())])
         );
     }
 
