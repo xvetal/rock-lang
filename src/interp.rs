@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
 use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
+use crate::value::Value;
 
 #[derive(Default)]
 pub struct Interpreter {
-    vars: HashMap<String, i64>,
+    vars: HashMap<String, Value>,
 }
 
 impl Interpreter {
@@ -12,7 +13,7 @@ impl Interpreter {
         Self::default()
     }
 
-    pub fn run(&mut self, program: &Program) -> Result<Option<i64>, String> {
+    pub fn run(&mut self, program: &Program) -> Result<Value, String> {
         for stmt in &program.stmts {
             match stmt {
                 Stmt::Let { name, value } => {
@@ -22,22 +23,22 @@ impl Interpreter {
             }
         }
         match &program.expr {
-            Some(expr) => self.eval(expr).map(Some),
-            None => Ok(None),
+            Some(expr) => self.eval(expr),
+            None => Ok(Value::Unit),
         }
     }
 
-    fn eval(&self, expr: &Expr) -> Result<i64, String> {
+    fn eval(&self, expr: &Expr) -> Result<Value, String> {
         match expr {
-            Expr::Int(n) => Ok(*n),
+            Expr::Int(n) => Ok(Value::Int(*n)),
             Expr::Var(name) => self
                 .vars
                 .get(name)
                 .copied()
                 .ok_or_else(|| format!("undefined variable: {name}")),
             Expr::Binary { op, left, right } => {
-                let l = self.eval(left)?;
-                let r = self.eval(right)?;
+                let l = self.eval_int(left)?;
+                let r = self.eval_int(right)?;
                 let result = match op {
                     BinaryOp::Add => l.checked_add(r),
                     BinaryOp::Sub => l.checked_sub(r),
@@ -49,15 +50,22 @@ impl Interpreter {
                         l.checked_div(r)
                     }
                 };
-                result.ok_or("integer overflow".to_string())
+                result.map(Value::Int).ok_or("integer overflow".to_string())
             }
             Expr::Unary { op, operand } => {
-                let value = self.eval(operand)?;
+                let value = self.eval_int(operand)?;
                 let result = match op {
                     UnaryOp::Neg => value.checked_neg(),
                 };
-                result.ok_or("integer overflow".to_string())
+                result.map(Value::Int).ok_or("integer overflow".to_string())
             }
+        }
+    }
+
+    fn eval_int(&self, expr: &Expr) -> Result<i64, String> {
+        match self.eval(expr)? {
+            Value::Int(n) => Ok(n),
+            other => Err(format!("expected integer, got {other}")),
         }
     }
 }
@@ -68,14 +76,16 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::Parser;
 
-    fn exec(interp: &mut Interpreter, input: &str) -> Result<Option<i64>, String> {
+    fn exec(interp: &mut Interpreter, input: &str) -> Result<Value, String> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
         interp.run(&program)
     }
 
     fn run(input: &str) -> Result<i64, String> {
-        exec(&mut Interpreter::new(), input)
-            .map(|value| value.expect("program should produce a value"))
+        match exec(&mut Interpreter::new(), input)? {
+            Value::Int(n) => Ok(n),
+            other => panic!("expected integer, got {other}"),
+        }
     }
 
     #[test]
@@ -155,14 +165,14 @@ mod tests {
 
     #[test]
     fn statements_only() {
-        assert_eq!(exec(&mut Interpreter::new(), "let x = 1;"), Ok(None));
+        assert_eq!(exec(&mut Interpreter::new(), "let x = 1;"), Ok(Value::Unit));
     }
 
     #[test]
     fn variables_persist_between_runs() {
         let mut interp = Interpreter::new();
-        assert_eq!(exec(&mut interp, "let x = 2;"), Ok(None));
-        assert_eq!(exec(&mut interp, "x * 3"), Ok(Some(6)));
+        assert_eq!(exec(&mut interp, "let x = 2;"), Ok(Value::Unit));
+        assert_eq!(exec(&mut interp, "x * 3"), Ok(Value::Int(6)));
     }
 
     #[test]

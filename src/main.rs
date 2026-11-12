@@ -2,6 +2,7 @@ mod ast;
 mod interp;
 mod lexer;
 mod parser;
+mod value;
 
 use std::env;
 use std::fs;
@@ -9,6 +10,7 @@ use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
 use interp::Interpreter;
+use value::Value;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -51,18 +53,18 @@ fn repl() {
     }
 }
 
-fn run_file(path: &str) -> Result<Option<i64>, String> {
+fn run_file(path: &str) -> Result<Value, String> {
     let source = fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
     run(&mut Interpreter::new(), &source)
 }
 
-fn report(result: Result<Option<i64>, String>) -> ExitCode {
+fn report(result: Result<Value, String>) -> ExitCode {
     match result {
-        Ok(Some(value)) => {
+        Ok(Value::Unit) => ExitCode::SUCCESS,
+        Ok(value) => {
             println!("{value}");
             ExitCode::SUCCESS
         }
-        Ok(None) => ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("error: {message}");
             ExitCode::FAILURE
@@ -70,7 +72,7 @@ fn report(result: Result<Option<i64>, String>) -> ExitCode {
     }
 }
 
-fn run(interp: &mut Interpreter, source: &str) -> Result<Option<i64>, String> {
+fn run(interp: &mut Interpreter, source: &str) -> Result<Value, String> {
     let tokens = lexer::tokenize(source)?;
     let program = parser::Parser::new(tokens).parse()?;
     interp.run(&program)
