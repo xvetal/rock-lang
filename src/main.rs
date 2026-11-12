@@ -3,10 +3,24 @@ mod interp;
 mod lexer;
 mod parser;
 
+use std::env;
+use std::fs;
 use std::io::{self, BufRead, Write};
+use std::process::ExitCode;
 
-fn main() {
-    repl();
+fn main() -> ExitCode {
+    let args: Vec<String> = env::args().collect();
+    match args.as_slice() {
+        [_] => {
+            repl();
+            ExitCode::SUCCESS
+        }
+        [_, cmd, path] if cmd == "run" => report(run_file(path)),
+        _ => {
+            eprintln!("usage: rock [run <file>]");
+            ExitCode::from(2)
+        }
+    }
 }
 
 fn repl() {
@@ -30,14 +44,25 @@ fn repl() {
             continue;
         }
 
-        print_result(run(&line));
+        report(run(&line));
     }
 }
 
-fn print_result(result: Result<i64, String>) {
+fn run_file(path: &str) -> Result<i64, String> {
+    let source = fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+    run(&source)
+}
+
+fn report(result: Result<i64, String>) -> ExitCode {
     match result {
-        Ok(value) => println!("{value}"),
-        Err(message) => eprintln!("error: {message}"),
+        Ok(value) => {
+            println!("{value}");
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("error: {message}");
+            ExitCode::FAILURE
+        }
     }
 }
 
