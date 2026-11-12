@@ -9,8 +9,7 @@ Version 0.1.0: an integer calculator.
 - Integer literals, `+ - * /`, parentheses
 - Operator precedence and left associativity
 - Errors for division by zero and integer overflow
-
-The input expression is hardcoded in `src/main.rs` for now; a CLI is next.
+- Interactive REPL and running expressions from a file (unreleased)
 
 ## Goals
 
@@ -29,8 +28,22 @@ print(x);
 
 ## Usage
 
-Planned CLI (not implemented yet):
+Install the `rock` binary from the repository root:
 
 ```sh
-rock run hello.rk
+cargo install --path .
+```
+
+Start the interactive REPL (exit with Ctrl+D):
+
+```sh
+rock
+> 1 + 2 * 3
+7
+```
+
+Run an expression from a file:
+
+```sh
+rock run examples/calc.rk
 ```
