@@ -4,7 +4,13 @@ A toy programming language written in Rust, built for learning.
 
 ## Status
 
-Early development: nothing works yet.
+Version 0.1.0: an integer calculator.
+
+- Integer literals, `+ - * /`, parentheses
+- Operator precedence and left associativity
+- Errors for division by zero and integer overflow
+
+The input expression is hardcoded in `src/main.rs` for now; a CLI is next.
 
 ## Goals
 
