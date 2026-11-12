@@ -8,6 +8,8 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
+use interp::Interpreter;
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     match args.as_slice() {
@@ -26,6 +28,7 @@ fn main() -> ExitCode {
 fn repl() {
     let stdin = io::stdin();
     let mut line = String::new();
+    let mut interp = Interpreter::new();
     loop {
         print!("> ");
         io::stdout().flush().expect("stdout should be writable");
@@ -44,21 +47,22 @@ fn repl() {
             continue;
         }
 
-        report(run(&line));
+        report(run(&mut interp, &line));
     }
 }
 
-fn run_file(path: &str) -> Result<i64, String> {
+fn run_file(path: &str) -> Result<Option<i64>, String> {
     let source = fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
-    run(&source)
+    run(&mut Interpreter::new(), &source)
 }
 
-fn report(result: Result<i64, String>) -> ExitCode {
+fn report(result: Result<Option<i64>, String>) -> ExitCode {
     match result {
-        Ok(value) => {
+        Ok(Some(value)) => {
             println!("{value}");
             ExitCode::SUCCESS
         }
+        Ok(None) => ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("error: {message}");
             ExitCode::FAILURE
@@ -66,8 +70,8 @@ fn report(result: Result<i64, String>) -> ExitCode {
     }
 }
 
-fn run(source: &str) -> Result<i64, String> {
+fn run(interp: &mut Interpreter, source: &str) -> Result<Option<i64>, String> {
     let tokens = lexer::tokenize(source)?;
-    let expr = parser::Parser::new(tokens).parse()?;
-    interp::eval(&expr)
+    let program = parser::Parser::new(tokens).parse()?;
+    interp.run(&program)
 }

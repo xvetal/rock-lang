@@ -14,6 +14,7 @@ pub enum UnaryOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Int(i64),
+    Var(String),
     Binary {
         op: BinaryOp,
         left: Box<Expr>,
@@ -23,4 +24,15 @@ pub enum Expr {
         op: UnaryOp,
         operand: Box<Expr>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stmt {
+    Let { name: String, value: Expr },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Program {
+    pub stmts: Vec<Stmt>,
+    pub expr: Option<Expr>,
 }

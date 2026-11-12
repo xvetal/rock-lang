@@ -1,30 +1,63 @@
-use crate::ast::{BinaryOp, Expr, UnaryOp};
+use std::collections::HashMap;
 
-pub fn eval(expr: &Expr) -> Result<i64, String> {
-    match expr {
-        Expr::Int(n) => Ok(*n),
-        Expr::Binary { op, left, right } => {
-            let l = eval(left)?;
-            let r = eval(right)?;
-            let result = match op {
-                BinaryOp::Add => l.checked_add(r),
-                BinaryOp::Sub => l.checked_sub(r),
-                BinaryOp::Mul => l.checked_mul(r),
-                BinaryOp::Div => {
-                    if r == 0 {
-                        return Err("division by zero".to_string());
-                    }
-                    l.checked_div(r)
+use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
+
+#[derive(Default)]
+pub struct Interpreter {
+    vars: HashMap<String, i64>,
+}
+
+impl Interpreter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn run(&mut self, program: &Program) -> Result<Option<i64>, String> {
+        for stmt in &program.stmts {
+            match stmt {
+                Stmt::Let { name, value } => {
+                    let value = self.eval(value)?;
+                    self.vars.insert(name.clone(), value);
                 }
-            };
-            result.ok_or("integer overflow".to_string())
+            }
         }
-        Expr::Unary { op, operand } => {
-            let value = eval(operand)?;
-            let result = match op {
-                UnaryOp::Neg => value.checked_neg(),
-            };
-            result.ok_or("integer overflow".to_string())
+        match &program.expr {
+            Some(expr) => self.eval(expr).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn eval(&self, expr: &Expr) -> Result<i64, String> {
+        match expr {
+            Expr::Int(n) => Ok(*n),
+            Expr::Var(name) => self
+                .vars
+                .get(name)
+                .copied()
+                .ok_or_else(|| format!("undefined variable: {name}")),
+            Expr::Binary { op, left, right } => {
+                let l = self.eval(left)?;
+                let r = self.eval(right)?;
+                let result = match op {
+                    BinaryOp::Add => l.checked_add(r),
+                    BinaryOp::Sub => l.checked_sub(r),
+                    BinaryOp::Mul => l.checked_mul(r),
+                    BinaryOp::Div => {
+                        if r == 0 {
+                            return Err("division by zero".to_string());
+                        }
+                        l.checked_div(r)
+                    }
+                };
+                result.ok_or("integer overflow".to_string())
+            }
+            Expr::Unary { op, operand } => {
+                let value = self.eval(operand)?;
+                let result = match op {
+                    UnaryOp::Neg => value.checked_neg(),
+                };
+                result.ok_or("integer overflow".to_string())
+            }
         }
     }
 }
@@ -35,10 +68,14 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::Parser;
 
+    fn exec(interp: &mut Interpreter, input: &str) -> Result<Option<i64>, String> {
+        let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
+        interp.run(&program)
+    }
+
     fn run(input: &str) -> Result<i64, String> {
-        let tokens = tokenize(input).unwrap();
-        let expr = Parser::new(tokens).parse().unwrap();
-        eval(&expr)
+        exec(&mut Interpreter::new(), input)
+            .map(|value| value.expect("program should produce a value"))
     }
 
     #[test]
@@ -104,6 +141,41 @@ mod tests {
     #[test]
     fn min_value_literal() {
         assert_eq!(run("-9223372036854775808"), Ok(i64::MIN));
+    }
+
+    #[test]
+    fn let_bindings() {
+        assert_eq!(run("let x = 1 + 2; let y = x * 3; y - 1"), Ok(8));
+    }
+
+    #[test]
+    fn shadowing() {
+        assert_eq!(run("let x = 1; let x = x + 1; x"), Ok(2));
+    }
+
+    #[test]
+    fn statements_only() {
+        assert_eq!(exec(&mut Interpreter::new(), "let x = 1;"), Ok(None));
+    }
+
+    #[test]
+    fn variables_persist_between_runs() {
+        let mut interp = Interpreter::new();
+        assert_eq!(exec(&mut interp, "let x = 2;"), Ok(None));
+        assert_eq!(exec(&mut interp, "x * 3"), Ok(Some(6)));
+    }
+
+    #[test]
+    fn undefined_variable() {
+        assert_eq!(run("x + 1"), Err("undefined variable: x".to_string()));
+    }
+
+    #[test]
+    fn use_before_definition() {
+        assert_eq!(
+            run("let y = x; let x = 1; y"),
+            Err("undefined variable: x".to_string())
+        );
     }
 
     #[test]
