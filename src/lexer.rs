@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Int(i64),
+    Int(u64),
     Plus,
     Minus,
     Star,
@@ -23,13 +23,13 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             '(' => Token::LParen,
             ')' => Token::RParen,
             '0'..='9' => {
-                let mut value = i64::from(c.to_digit(10).expect("c is an ASCII digit"));
+                let mut value = u64::from(c.to_digit(10).expect("c is an ASCII digit"));
                 while let Some(&d) = chars.peek() {
                     let Some(digit) = d.to_digit(10) else { break };
                     chars.next();
                     value = value
                         .checked_mul(10)
-                        .and_then(|v| v.checked_add(i64::from(digit)))
+                        .and_then(|v| v.checked_add(u64::from(digit)))
                         .ok_or("integer literal is too large")?;
                 }
                 Token::Int(value)
@@ -102,17 +102,17 @@ mod tests {
     }
 
     #[test]
-    fn max_i64() {
+    fn max_u64() {
         assert_eq!(
-            tokenize("9223372036854775807"),
-            Ok(vec![Token::Int(i64::MAX)])
+            tokenize("18446744073709551615"),
+            Ok(vec![Token::Int(u64::MAX)])
         );
     }
 
     #[test]
     fn integer_overflow() {
         assert_eq!(
-            tokenize("9223372036854775808"),
+            tokenize("18446744073709551616"),
             Err("integer literal is too large".to_string())
         );
     }

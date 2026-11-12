@@ -102,6 +102,11 @@ mod tests {
     }
 
     #[test]
+    fn min_value_literal() {
+        assert_eq!(run("-9223372036854775808"), Ok(i64::MIN));
+    }
+
+    #[test]
     fn division_by_zero() {
         assert_eq!(run("1 / 0"), Err("division by zero".to_string()));
     }
@@ -139,6 +144,22 @@ mod tests {
     fn negation_overflow() {
         assert_eq!(
             run("-(-9223372036854775807 - 1)"),
+            Err("integer overflow".to_string())
+        );
+    }
+
+    #[test]
+    fn negation_of_min_value_overflows() {
+        assert_eq!(
+            run("--9223372036854775808"),
+            Err("integer overflow".to_string())
+        );
+    }
+
+    #[test]
+    fn min_value_divided_by_minus_one() {
+        assert_eq!(
+            run("-9223372036854775808 / -1"),
             Err("integer overflow".to_string())
         );
     }

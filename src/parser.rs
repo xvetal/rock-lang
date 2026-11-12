@@ -60,6 +60,12 @@ impl Parser {
     fn unary(&mut self) -> Result<Expr, String> {
         if let Some(Token::Minus) = self.peek() {
             self.advance();
+            if let Some(&Token::Int(n)) = self.peek()
+                && n == i64::MIN.unsigned_abs()
+            {
+                self.advance();
+                return Ok(Expr::Int(i64::MIN));
+            }
             let operand = self.unary()?;
             return Ok(Expr::Unary {
                 op: UnaryOp::Neg,
@@ -71,7 +77,11 @@ impl Parser {
 
     fn primary(&mut self) -> Result<Expr, String> {
         match self.advance() {
-            Some(Token::Int(n)) => Ok(Expr::Int(n)),
+            Some(Token::Int(n)) => {
+                let value =
+                    i64::try_from(n).map_err(|_| "integer literal is too large".to_string())?;
+                Ok(Expr::Int(value))
+            }
             Some(Token::LParen) => {
                 let inner = self.expr()?;
                 match self.advance() {
@@ -227,6 +237,11 @@ mod tests {
     }
 
     #[test]
+    fn min_value_literal() {
+        assert_eq!(parse("-9223372036854775808"), Ok(int(i64::MIN)));
+    }
+
+    #[test]
     fn empty_input() {
         assert_eq!(parse(""), Err("unexpected end of input".to_string()));
     }
@@ -269,5 +284,21 @@ mod tests {
     #[test]
     fn unary_minus_without_operand() {
         assert_eq!(parse("-"), Err("unexpected end of input".to_string()));
+    }
+
+    #[test]
+    fn literal_too_large() {
+        assert_eq!(
+            parse("9223372036854775808"),
+            Err("integer literal is too large".to_string())
+        );
+    }
+
+    #[test]
+    fn min_value_literal_in_parens_is_too_large() {
+        assert_eq!(
+            parse("-(9223372036854775808)"),
+            Err("integer literal is too large".to_string())
+        );
     }
 }
