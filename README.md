@@ -4,12 +4,12 @@ A toy programming language written in Rust, built for learning.
 
 ## Status
 
-Version 0.1.0: an integer calculator.
+Version 0.2.0: an integer calculator with a command-line interface.
 
-- Integer literals, `+ - * /`, parentheses
+- Integer literals, `+ - * /`, unary minus, parentheses
 - Operator precedence and left associativity
 - Errors for division by zero and integer overflow
-- Interactive REPL and running expressions from a file (unreleased)
+- Interactive REPL and running expressions from a file
 
 ## Goals
 

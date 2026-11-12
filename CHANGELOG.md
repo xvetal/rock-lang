@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-12
+
 ### Added
 - Interactive REPL: run `rock` without arguments
 - `rock run <file>` evaluates an expression from a file
