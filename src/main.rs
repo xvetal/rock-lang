@@ -4,8 +4,14 @@ mod lexer;
 mod parser;
 
 fn main() {
-    let tokens = lexer::tokenize("1 + 2 * 3").unwrap();
-    let expr = parser::Parser::new(tokens).parse().unwrap();
-    println!("{expr:#?}");
-    println!("= {:?}", interp::eval(&expr));
+    match run("1 + 2 * 3") {
+        Ok(value) => println!("{value}"),
+        Err(message) => eprintln!("error: {message}"),
+    }
+}
+
+fn run(source: &str) -> Result<i64, String> {
+    let tokens = lexer::tokenize(source)?;
+    let expr = parser::Parser::new(tokens).parse()?;
+    interp::eval(&expr)
 }
