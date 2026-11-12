@@ -20,6 +20,9 @@ impl Interpreter {
                     let value = self.eval(value)?;
                     self.vars.insert(name.clone(), value);
                 }
+                Stmt::Expr(expr) => {
+                    self.eval(expr)?;
+                }
             }
         }
         match &program.expr {
@@ -176,6 +179,11 @@ mod tests {
     }
 
     #[test]
+    fn expression_statement_value_is_discarded() {
+        assert_eq!(exec(&mut Interpreter::new(), "1 + 2;"), Ok(Value::Unit));
+    }
+
+    #[test]
     fn undefined_variable() {
         assert_eq!(run("x + 1"), Err("undefined variable: x".to_string()));
     }
@@ -186,6 +194,11 @@ mod tests {
             run("let y = x; let x = 1; y"),
             Err("undefined variable: x".to_string())
         );
+    }
+
+    #[test]
+    fn expression_statement_error() {
+        assert_eq!(run("1 / 0; 2"), Err("division by zero".to_string()));
     }
 
     #[test]

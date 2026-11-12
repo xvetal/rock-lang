@@ -13,14 +13,23 @@ impl Parser {
 
     pub fn parse(&mut self) -> Result<Program, String> {
         let mut stmts = Vec::new();
-        while let Some(Token::Let) = self.peek() {
-            stmts.push(self.let_stmt()?);
+        let mut expr = None;
+        loop {
+            match self.peek() {
+                None => break,
+                Some(Token::Let) => stmts.push(self.let_stmt()?),
+                Some(_) => {
+                    let value = self.expr()?;
+                    if self.peek() == Some(&Token::Semicolon) {
+                        self.advance();
+                        stmts.push(Stmt::Expr(value));
+                    } else {
+                        expr = Some(value);
+                        break;
+                    }
+                }
+            }
         }
-        let expr = if self.peek().is_some() {
-            Some(self.expr()?)
-        } else {
-            None
-        };
         if let Some(token) = self.peek() {
             return Err(format!("unexpected token: {token:?}"));
         }
@@ -339,6 +348,35 @@ mod tests {
     }
 
     #[test]
+    fn expression_statement() {
+        assert_eq!(
+            parse_program("1 + 2;"),
+            Ok(Program {
+                stmts: vec![Stmt::Expr(bin(BinaryOp::Add, int(1), int(2)))],
+                expr: None
+            })
+        );
+    }
+
+    #[test]
+    fn mixed_statements() {
+        assert_eq!(
+            parse_program("1; let x = 2; x; x + 1"),
+            Ok(Program {
+                stmts: vec![
+                    Stmt::Expr(int(1)),
+                    Stmt::Let {
+                        name: "x".to_string(),
+                        value: int(2)
+                    },
+                    Stmt::Expr(var("x")),
+                ],
+                expr: Some(bin(BinaryOp::Add, var("x"), int(1)))
+            })
+        );
+    }
+
+    #[test]
     fn unclosed_paren() {
         assert_eq!(parse("(42"), Err("expected ')'".to_string()));
     }
@@ -399,6 +437,14 @@ mod tests {
         assert_eq!(
             parse_program("let = 1;"),
             Err("expected variable name after 'let'".to_string())
+        );
+    }
+
+    #[test]
+    fn missing_semicolon_between_expressions() {
+        assert_eq!(
+            parse_program("1 2;"),
+            Err("unexpected token: Int(2)".to_string())
         );
     }
 

@@ -29,6 +29,7 @@ pub enum Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Let { name: String, value: Expr },
+    Expr(Expr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
