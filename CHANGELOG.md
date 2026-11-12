@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-13
+
 ### Added
 - Variables: `let x = 1 + 2;` binds a name, `x` reads it
 - A program is a sequence of statements optionally followed by an expression, whose value is printed
