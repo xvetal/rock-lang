@@ -31,7 +31,7 @@ impl Parser {
             }
         }
         if let Some(token) = self.peek() {
-            return Err(format!("unexpected token: {token:?}"));
+            return Err(format!("unexpected '{token}'"));
         }
         Ok(Program { stmts, expr })
     }
@@ -125,7 +125,7 @@ impl Parser {
                 self.expect(Token::RParen, "')'")?;
                 Ok(inner)
             }
-            Some(token) => Err(format!("unexpected token: {token:?}")),
+            Some(token) => Err(format!("unexpected '{token}'")),
             None => Err("unexpected end of input".to_string()),
         }
     }
@@ -414,17 +414,17 @@ mod tests {
 
     #[test]
     fn extra_closing_paren() {
-        assert_eq!(parse("42)"), Err("unexpected token: RParen".to_string()));
+        assert_eq!(parse("42)"), Err("unexpected ')'".to_string()));
     }
 
     #[test]
     fn trailing_tokens() {
-        assert_eq!(parse("1 2"), Err("unexpected token: Int(2)".to_string()));
+        assert_eq!(parse("1 2"), Err("unexpected '2'".to_string()));
     }
 
     #[test]
     fn empty_parens() {
-        assert_eq!(parse("()"), Err("unexpected token: RParen".to_string()));
+        assert_eq!(parse("()"), Err("unexpected ')'".to_string()));
     }
 
     #[test]
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn missing_left_operand() {
-        assert_eq!(parse("* 2"), Err("unexpected token: Star".to_string()));
+        assert_eq!(parse("* 2"), Err("unexpected '*'".to_string()));
     }
 
     #[test]
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn call_trailing_comma() {
-        assert_eq!(parse("f(1,)"), Err("unexpected token: RParen".to_string()));
+        assert_eq!(parse("f(1,)"), Err("unexpected ')'".to_string()));
     }
 
     #[test]
@@ -483,10 +483,7 @@ mod tests {
 
     #[test]
     fn missing_semicolon_between_expressions() {
-        assert_eq!(
-            parse_program("1 2;"),
-            Err("unexpected token: Int(2)".to_string())
-        );
+        assert_eq!(parse_program("1 2;"), Err("unexpected '2'".to_string()));
     }
 
     #[test]
@@ -503,7 +500,7 @@ mod tests {
     fn let_after_expression() {
         assert_eq!(
             parse_program("1 let x = 2;"),
-            Err("unexpected token: Let".to_string())
+            Err("unexpected 'let'".to_string())
         );
     }
 }

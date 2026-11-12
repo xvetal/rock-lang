@@ -4,8 +4,6 @@
 - [ ] Report line and column in errors (add `Span` to tokens)
 
 ## Parser
-- [ ] Human-readable errors: implement `Display` for `Token`
-      (`unexpected ')'` instead of `unexpected token: RParen`)
 - [ ] Replace `String` errors with `enum ParseError`
 - [ ] `"()"` should report `expected expression`
 - [ ] Limit nesting depth to avoid stack overflow on deeply nested input

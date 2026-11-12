@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Error messages show tokens as written: `unexpected ')'` instead of `unexpected token: RParen`
+
 ## [0.3.0] - 2026-11-13
 
 ### Added

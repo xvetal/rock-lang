@@ -1,3 +1,5 @@
+use std::fmt;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Int(u64),
@@ -12,6 +14,25 @@ pub enum Token {
     Comma,
     LParen,
     RParen,
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Token::Int(n) => write!(f, "{n}"),
+            Token::Ident(name) => write!(f, "{name}"),
+            Token::Let => write!(f, "let"),
+            Token::Plus => write!(f, "+"),
+            Token::Minus => write!(f, "-"),
+            Token::Star => write!(f, "*"),
+            Token::Slash => write!(f, "/"),
+            Token::Eq => write!(f, "="),
+            Token::Semicolon => write!(f, ";"),
+            Token::Comma => write!(f, ","),
+            Token::LParen => write!(f, "("),
+            Token::RParen => write!(f, ")"),
+        }
+    }
 }
 
 pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
@@ -190,6 +211,14 @@ mod tests {
                 Token::RParen,
             ])
         );
+    }
+
+    #[test]
+    fn display_round_trip() {
+        let source = "let x = f ( 1 , y ) * 2 / 3 - 4 + 5 ;";
+        let tokens = tokenize(source).unwrap();
+        let printed: Vec<String> = tokens.iter().map(|t| t.to_string()).collect();
+        assert_eq!(printed.join(" "), source);
     }
 
     #[test]
