@@ -67,6 +67,10 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
 mod tests {
     use super::*;
 
+    fn ident(name: &str) -> Token {
+        Token::Ident(name.to_string())
+    }
+
     #[test]
     fn single_char_tokens() {
         assert_eq!(
@@ -134,10 +138,10 @@ mod tests {
         assert_eq!(
             tokenize("x foo_bar _tmp x1"),
             Ok(vec![
-                Token::Ident("x".to_string()),
-                Token::Ident("foo_bar".to_string()),
-                Token::Ident("_tmp".to_string()),
-                Token::Ident("x1".to_string()),
+                ident("x"),
+                ident("foo_bar"),
+                ident("_tmp"),
+                ident("x1"),
             ])
         );
     }
@@ -149,10 +153,7 @@ mod tests {
 
     #[test]
     fn keyword_prefix_is_identifier() {
-        assert_eq!(
-            tokenize("letter"),
-            Ok(vec![Token::Ident("letter".to_string())])
-        );
+        assert_eq!(tokenize("letter"), Ok(vec![ident("letter")]));
     }
 
     #[test]
@@ -161,7 +162,7 @@ mod tests {
             tokenize("let x = 1;"),
             Ok(vec![
                 Token::Let,
-                Token::Ident("x".to_string()),
+                ident("x"),
                 Token::Eq,
                 Token::Int(1),
                 Token::Semicolon,
@@ -171,10 +172,7 @@ mod tests {
 
     #[test]
     fn digit_then_letters() {
-        assert_eq!(
-            tokenize("1x"),
-            Ok(vec![Token::Int(1), Token::Ident("x".to_string())])
-        );
+        assert_eq!(tokenize("1x"), Ok(vec![Token::Int(1), ident("x")]));
     }
 
     #[test]

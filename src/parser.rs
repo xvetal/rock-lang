@@ -144,6 +144,7 @@ impl Parser {
 mod tests {
     use super::*;
     use crate::lexer::tokenize;
+    use BinaryOp::{Add, Div, Mul, Sub};
 
     fn parse_program(input: &str) -> Result<Program, String> {
         Parser::new(tokenize(input).unwrap()).parse()
@@ -160,6 +161,13 @@ mod tests {
 
     fn var(name: &str) -> Expr {
         Expr::Var(name.to_string())
+    }
+
+    fn let_stmt(name: &str, value: Expr) -> Stmt {
+        Stmt::Let {
+            name: name.to_string(),
+            value,
+        }
     }
 
     fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
@@ -179,28 +187,24 @@ mod tests {
 
     #[test]
     fn integer() {
-        assert_eq!(parse("42"), Ok(Expr::Int(42)));
+        assert_eq!(parse("42"), Ok(int(42)));
     }
 
     #[test]
     fn parenthesized() {
-        assert_eq!(parse("(42)"), Ok(Expr::Int(42)));
+        assert_eq!(parse("(42)"), Ok(int(42)));
     }
 
     #[test]
     fn nested_parens() {
-        assert_eq!(parse("((42))"), Ok(Expr::Int(42)));
+        assert_eq!(parse("((42))"), Ok(int(42)));
     }
 
     #[test]
     fn multiplication_binds_tighter_than_addition() {
         assert_eq!(
             parse("1 + 2 * 3"),
-            Ok(bin(
-                BinaryOp::Add,
-                int(1),
-                bin(BinaryOp::Mul, int(2), int(3))
-            ))
+            Ok(bin(Add, int(1), bin(Mul, int(2), int(3))))
         );
     }
 
@@ -209,9 +213,9 @@ mod tests {
         assert_eq!(
             parse("1 + 2 - 3 * 4 / 5"),
             Ok(bin(
-                BinaryOp::Sub,
-                bin(BinaryOp::Add, int(1), int(2)),
-                bin(BinaryOp::Div, bin(BinaryOp::Mul, int(3), int(4)), int(5))
+                Sub,
+                bin(Add, int(1), int(2)),
+                bin(Div, bin(Mul, int(3), int(4)), int(5))
             ))
         );
     }
@@ -220,11 +224,7 @@ mod tests {
     fn subtraction_is_left_associative() {
         assert_eq!(
             parse("10 - 3 - 2"),
-            Ok(bin(
-                BinaryOp::Sub,
-                bin(BinaryOp::Sub, int(10), int(3)),
-                int(2)
-            ))
+            Ok(bin(Sub, bin(Sub, int(10), int(3)), int(2)))
         );
     }
 
@@ -232,11 +232,7 @@ mod tests {
     fn division_is_left_associative() {
         assert_eq!(
             parse("8 / 4 / 2"),
-            Ok(bin(
-                BinaryOp::Div,
-                bin(BinaryOp::Div, int(8), int(4)),
-                int(2)
-            ))
+            Ok(bin(Div, bin(Div, int(8), int(4)), int(2)))
         );
     }
 
@@ -244,11 +240,7 @@ mod tests {
     fn parens_override_precedence() {
         assert_eq!(
             parse("(1 + 2) * 3"),
-            Ok(bin(
-                BinaryOp::Mul,
-                bin(BinaryOp::Add, int(1), int(2)),
-                int(3)
-            ))
+            Ok(bin(Mul, bin(Add, int(1), int(2)), int(3)))
         );
     }
 
@@ -264,20 +256,17 @@ mod tests {
 
     #[test]
     fn unary_minus_binds_tighter_than_multiplication() {
-        assert_eq!(parse("-2 * 3"), Ok(bin(BinaryOp::Mul, neg(int(2)), int(3))));
+        assert_eq!(parse("-2 * 3"), Ok(bin(Mul, neg(int(2)), int(3))));
     }
 
     #[test]
     fn unary_minus_after_binary_operator() {
-        assert_eq!(parse("1 - -2"), Ok(bin(BinaryOp::Sub, int(1), neg(int(2)))));
+        assert_eq!(parse("1 - -2"), Ok(bin(Sub, int(1), neg(int(2)))));
     }
 
     #[test]
     fn unary_minus_on_parenthesized_expr() {
-        assert_eq!(
-            parse("-(1 + 2)"),
-            Ok(neg(bin(BinaryOp::Add, int(1), int(2))))
-        );
+        assert_eq!(parse("-(1 + 2)"), Ok(neg(bin(Add, int(1), int(2)))));
     }
 
     #[test]
@@ -294,11 +283,7 @@ mod tests {
     fn variable_in_expression() {
         assert_eq!(
             parse("x * (y + 1)"),
-            Ok(bin(
-                BinaryOp::Mul,
-                var("x"),
-                bin(BinaryOp::Add, var("y"), int(1))
-            ))
+            Ok(bin(Mul, var("x"), bin(Add, var("y"), int(1))))
         );
     }
 
@@ -318,10 +303,7 @@ mod tests {
         assert_eq!(
             parse_program("let x = 1 + 2;"),
             Ok(Program {
-                stmts: vec![Stmt::Let {
-                    name: "x".to_string(),
-                    value: bin(BinaryOp::Add, int(1), int(2))
-                }],
+                stmts: vec![let_stmt("x", bin(Add, int(1), int(2)))],
                 expr: None
             })
         );
@@ -332,16 +314,7 @@ mod tests {
         assert_eq!(
             parse_program("let x = 1; let y = x; y"),
             Ok(Program {
-                stmts: vec![
-                    Stmt::Let {
-                        name: "x".to_string(),
-                        value: int(1)
-                    },
-                    Stmt::Let {
-                        name: "y".to_string(),
-                        value: var("x")
-                    }
-                ],
+                stmts: vec![let_stmt("x", int(1)), let_stmt("y", var("x"))],
                 expr: Some(var("y"))
             })
         );
@@ -352,7 +325,7 @@ mod tests {
         assert_eq!(
             parse_program("1 + 2;"),
             Ok(Program {
-                stmts: vec![Stmt::Expr(bin(BinaryOp::Add, int(1), int(2)))],
+                stmts: vec![Stmt::Expr(bin(Add, int(1), int(2)))],
                 expr: None
             })
         );
@@ -365,13 +338,10 @@ mod tests {
             Ok(Program {
                 stmts: vec![
                     Stmt::Expr(int(1)),
-                    Stmt::Let {
-                        name: "x".to_string(),
-                        value: int(2)
-                    },
+                    let_stmt("x", int(2)),
                     Stmt::Expr(var("x")),
                 ],
-                expr: Some(bin(BinaryOp::Add, var("x"), int(1)))
+                expr: Some(bin(Add, var("x"), int(1)))
             })
         );
     }
