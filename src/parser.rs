@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr};
+use crate::ast::{BinaryOp, Expr, UnaryOp};
 use crate::lexer::Token;
 
 pub struct Parser {
@@ -39,7 +39,7 @@ impl Parser {
     }
 
     fn term(&mut self) -> Result<Expr, String> {
-        let mut left = self.primary()?;
+        let mut left = self.unary()?;
         loop {
             let op = match self.peek() {
                 Some(Token::Star) => BinaryOp::Mul,
@@ -47,7 +47,7 @@ impl Parser {
                 _ => break,
             };
             self.advance();
-            let right = self.primary()?;
+            let right = self.unary()?;
             left = Expr::Binary {
                 op,
                 left: Box::new(left),
@@ -55,6 +55,18 @@ impl Parser {
             };
         }
         Ok(left)
+    }
+
+    fn unary(&mut self) -> Result<Expr, String> {
+        if let Some(Token::Minus) = self.peek() {
+            self.advance();
+            let operand = self.unary()?;
+            return Ok(Expr::Unary {
+                op: UnaryOp::Neg,
+                operand: Box::new(operand),
+            });
+        }
+        self.primary()
     }
 
     fn primary(&mut self) -> Result<Expr, String> {
@@ -101,6 +113,13 @@ mod tests {
             op,
             left: Box::new(left),
             right: Box::new(right),
+        }
+    }
+
+    fn neg(operand: Expr) -> Expr {
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            operand: Box::new(operand),
         }
     }
 
@@ -180,6 +199,34 @@ mod tests {
     }
 
     #[test]
+    fn unary_minus() {
+        assert_eq!(parse("-5"), Ok(neg(int(5))));
+    }
+
+    #[test]
+    fn double_unary_minus() {
+        assert_eq!(parse("--5"), Ok(neg(neg(int(5)))));
+    }
+
+    #[test]
+    fn unary_minus_binds_tighter_than_multiplication() {
+        assert_eq!(parse("-2 * 3"), Ok(bin(BinaryOp::Mul, neg(int(2)), int(3))));
+    }
+
+    #[test]
+    fn unary_minus_after_binary_operator() {
+        assert_eq!(parse("1 - -2"), Ok(bin(BinaryOp::Sub, int(1), neg(int(2)))));
+    }
+
+    #[test]
+    fn unary_minus_on_parenthesized_expr() {
+        assert_eq!(
+            parse("-(1 + 2)"),
+            Ok(neg(bin(BinaryOp::Add, int(1), int(2))))
+        );
+    }
+
+    #[test]
     fn empty_input() {
         assert_eq!(parse(""), Err("unexpected end of input".to_string()));
     }
@@ -217,5 +264,10 @@ mod tests {
     #[test]
     fn missing_left_operand() {
         assert_eq!(parse("* 2"), Err("unexpected token: Star".to_string()));
+    }
+
+    #[test]
+    fn unary_minus_without_operand() {
+        assert_eq!(parse("-"), Err("unexpected end of input".to_string()));
     }
 }

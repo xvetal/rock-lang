@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr};
+use crate::ast::{BinaryOp, Expr, UnaryOp};
 
 pub fn eval(expr: &Expr) -> Result<i64, String> {
     match expr {
@@ -16,6 +16,13 @@ pub fn eval(expr: &Expr) -> Result<i64, String> {
                     }
                     l.checked_div(r)
                 }
+            };
+            result.ok_or("integer overflow".to_string())
+        }
+        Expr::Unary { op, operand } => {
+            let value = eval(operand)?;
+            let result = match op {
+                UnaryOp::Neg => value.checked_neg(),
             };
             result.ok_or("integer overflow".to_string())
         }
@@ -75,6 +82,26 @@ mod tests {
     }
 
     #[test]
+    fn negation() {
+        assert_eq!(run("-5"), Ok(-5));
+    }
+
+    #[test]
+    fn double_negation() {
+        assert_eq!(run("--5"), Ok(5));
+    }
+
+    #[test]
+    fn negation_of_expression() {
+        assert_eq!(run("-(1 + 2) * 3"), Ok(-9));
+    }
+
+    #[test]
+    fn computed_min_value() {
+        assert_eq!(run("-9223372036854775807 - 1"), Ok(i64::MIN));
+    }
+
+    #[test]
     fn division_by_zero() {
         assert_eq!(run("1 / 0"), Err("division by zero".to_string()));
     }
@@ -104,6 +131,14 @@ mod tests {
     fn multiplication_overflow() {
         assert_eq!(
             run("9223372036854775807 * 2"),
+            Err("integer overflow".to_string())
+        );
+    }
+
+    #[test]
+    fn negation_overflow() {
+        assert_eq!(
+            run("-(-9223372036854775807 - 1)"),
             Err("integer overflow".to_string())
         );
     }
