@@ -19,12 +19,14 @@ Version 0.2.0: an integer calculator with a command-line interface.
 
 ## Example
 
-Planned syntax (subject to change):
-
 ```rock
 let x = 1 + 2 * 3;
 print(x);
+let y = x * x;
+y - x
 ```
+
+Running it prints `7` from `print`, then `42`, the value of the final expression.
 
 ## Usage
 
@@ -38,12 +40,13 @@ Start the interactive REPL (exit with Ctrl+D):
 
 ```sh
 rock
-> 1 + 2 * 3
-7
+> let x = 1 + 2 * 3;
+> x * 2
+14
 ```
 
-Run an expression from a file:
+Run a program from a file:
 
 ```sh
-rock run examples/calc.rk
+rock run examples/print.rk
 ```
