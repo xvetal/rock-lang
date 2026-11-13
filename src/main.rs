@@ -74,6 +74,8 @@ fn report(result: Result<Value, String>) -> ExitCode {
 
 fn run(interp: &mut Interpreter<io::Stdout>, source: &str) -> Result<Value, String> {
     let tokens = lexer::tokenize(source)?;
-    let program = parser::Parser::new(tokens).parse()?;
+    let program = parser::Parser::new(tokens)
+        .parse()
+        .map_err(|e| e.to_string())?;
     interp.run(&program)
 }
