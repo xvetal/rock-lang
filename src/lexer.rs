@@ -14,6 +14,7 @@ pub enum Token {
     Comma,
     LParen,
     RParen,
+    Eof,
 }
 
 impl fmt::Display for Token {
@@ -31,6 +32,7 @@ impl fmt::Display for Token {
             Token::Comma => write!(f, ","),
             Token::LParen => write!(f, "("),
             Token::RParen => write!(f, ")"),
+            Token::Eof => write!(f, "end of input"),
         }
     }
 }
@@ -83,6 +85,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
         tokens.push(token);
     }
 
+    tokens.push(Token::Eof);
     Ok(tokens)
 }
 
@@ -105,6 +108,7 @@ mod tests {
                 Token::Slash,
                 Token::LParen,
                 Token::RParen,
+                Token::Eof
             ])
         );
     }
@@ -113,7 +117,12 @@ mod tests {
     fn integers() {
         assert_eq!(
             tokenize("0 42 123"),
-            Ok(vec![Token::Int(0), Token::Int(42), Token::Int(123)])
+            Ok(vec![
+                Token::Int(0),
+                Token::Int(42),
+                Token::Int(123),
+                Token::Eof
+            ])
         );
     }
 
@@ -129,30 +138,34 @@ mod tests {
                 Token::Star,
                 Token::Int(4),
                 Token::RParen,
+                Token::Eof
             ])
         );
     }
 
     #[test]
     fn number_followed_by_operator() {
-        assert_eq!(tokenize("123+"), Ok(vec![Token::Int(123), Token::Plus]));
+        assert_eq!(
+            tokenize("123+"),
+            Ok(vec![Token::Int(123), Token::Plus, Token::Eof])
+        );
     }
 
     #[test]
     fn skips_whitespace() {
-        assert_eq!(tokenize(" \t\r\n42 "), Ok(vec![Token::Int(42)]));
+        assert_eq!(tokenize(" \t\r\n42 "), Ok(vec![Token::Int(42), Token::Eof]));
     }
 
     #[test]
     fn empty_input() {
-        assert_eq!(tokenize(""), Ok(vec![]));
+        assert_eq!(tokenize(""), Ok(vec![Token::Eof]));
     }
 
     #[test]
     fn max_u64() {
         assert_eq!(
             tokenize("18446744073709551615"),
-            Ok(vec![Token::Int(u64::MAX)])
+            Ok(vec![Token::Int(u64::MAX), Token::Eof])
         );
     }
 
@@ -165,18 +178,19 @@ mod tests {
                 ident("foo_bar"),
                 ident("_tmp"),
                 ident("x1"),
+                Token::Eof
             ])
         );
     }
 
     #[test]
     fn let_keyword() {
-        assert_eq!(tokenize("let"), Ok(vec![Token::Let]));
+        assert_eq!(tokenize("let"), Ok(vec![Token::Let, Token::Eof]));
     }
 
     #[test]
     fn keyword_prefix_is_identifier() {
-        assert_eq!(tokenize("letter"), Ok(vec![ident("letter")]));
+        assert_eq!(tokenize("letter"), Ok(vec![ident("letter"), Token::Eof]));
     }
 
     #[test]
@@ -189,13 +203,17 @@ mod tests {
                 Token::Eq,
                 Token::Int(1),
                 Token::Semicolon,
+                Token::Eof
             ])
         );
     }
 
     #[test]
     fn digit_then_letters() {
-        assert_eq!(tokenize("1x"), Ok(vec![Token::Int(1), ident("x")]));
+        assert_eq!(
+            tokenize("1x"),
+            Ok(vec![Token::Int(1), ident("x"), Token::Eof])
+        );
     }
 
     #[test]
@@ -209,6 +227,7 @@ mod tests {
                 Token::Comma,
                 Token::Int(1),
                 Token::RParen,
+                Token::Eof
             ])
         );
     }
@@ -217,7 +236,11 @@ mod tests {
     fn display_round_trip() {
         let source = "let x = f ( 1 , y ) * 2 / 3 - 4 + 5 ;";
         let tokens = tokenize(source).unwrap();
-        let printed: Vec<String> = tokens.iter().map(|t| t.to_string()).collect();
+        let printed: Vec<String> = tokens
+            .iter()
+            .filter(|t| **t != Token::Eof)
+            .map(|t| t.to_string())
+            .collect();
         assert_eq!(printed.join(" "), source);
     }
 

@@ -5,10 +5,7 @@ use crate::lexer::Token;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseError {
-    Expected {
-        what: &'static str,
-        found: Option<Token>,
-    },
+    Expected { what: &'static str, found: Token },
     Unexpected(Token),
     IntegerTooLarge,
 }
@@ -18,11 +15,11 @@ impl fmt::Display for ParseError {
         match self {
             ParseError::Expected {
                 what,
-                found: Some(token),
-            } => write!(f, "expected {what}, found '{token}'"),
-            ParseError::Expected { what, found: None } => {
+                found: Token::Eof,
+            } => {
                 write!(f, "expected {what}, found end of input")
             }
+            ParseError::Expected { what, found } => write!(f, "expected {what}, found '{found}'"),
             ParseError::Unexpected(token) => write!(f, "unexpected '{token}'"),
             ParseError::IntegerTooLarge => write!(f, "integer literal is too large"),
         }
@@ -44,11 +41,11 @@ impl Parser {
         let mut expr = None;
         loop {
             match self.peek() {
-                None => break,
-                Some(Token::Let) => stmts.push(self.let_stmt()?),
-                Some(_) => {
+                Token::Eof => break,
+                Token::Let => stmts.push(self.let_stmt()?),
+                _ => {
                     let value = self.expr()?;
-                    if self.peek() == Some(&Token::Semicolon) {
+                    if self.peek() == &Token::Semicolon {
                         self.advance();
                         stmts.push(Stmt::Expr(value));
                     } else {
@@ -58,8 +55,8 @@ impl Parser {
                 }
             }
         }
-        if let Some(token) = self.peek() {
-            return Err(ParseError::Unexpected(token.clone()));
+        if self.peek() != &Token::Eof {
+            return Err(ParseError::Unexpected(self.peek().clone()));
         }
         Ok(Program { stmts, expr })
     }
@@ -67,7 +64,7 @@ impl Parser {
     fn let_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.advance();
         let name = match self.advance() {
-            Some(Token::Ident(name)) => name,
+            Token::Ident(name) => name,
             other => {
                 return Err(ParseError::Expected {
                     what: "variable name after 'let'",
@@ -85,8 +82,8 @@ impl Parser {
         let mut left = self.term()?;
         loop {
             let op = match self.peek() {
-                Some(Token::Plus) => BinaryOp::Add,
-                Some(Token::Minus) => BinaryOp::Sub,
+                Token::Plus => BinaryOp::Add,
+                Token::Minus => BinaryOp::Sub,
                 _ => break,
             };
             self.advance();
@@ -104,8 +101,8 @@ impl Parser {
         let mut left = self.unary()?;
         loop {
             let op = match self.peek() {
-                Some(Token::Star) => BinaryOp::Mul,
-                Some(Token::Slash) => BinaryOp::Div,
+                Token::Star => BinaryOp::Mul,
+                Token::Slash => BinaryOp::Div,
                 _ => break,
             };
             self.advance();
@@ -120,9 +117,9 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Result<Expr, ParseError> {
-        if let Some(Token::Minus) = self.peek() {
+        if self.peek() == &Token::Minus {
             self.advance();
-            if let Some(&Token::Int(n)) = self.peek()
+            if let &Token::Int(n) = self.peek()
                 && n == i64::MIN.unsigned_abs()
             {
                 self.advance();
@@ -139,12 +136,12 @@ impl Parser {
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
         match self.advance() {
-            Some(Token::Int(n)) => {
+            Token::Int(n) => {
                 let value = i64::try_from(n).map_err(|_| ParseError::IntegerTooLarge)?;
                 Ok(Expr::Int(value))
             }
-            Some(Token::Ident(name)) => {
-                if self.peek() == Some(&Token::LParen) {
+            Token::Ident(name) => {
+                if self.peek() == &Token::LParen {
                     self.advance();
                     let args = self.args()?;
                     Ok(Expr::Call { name, args })
@@ -152,7 +149,7 @@ impl Parser {
                     Ok(Expr::Var(name))
                 }
             }
-            Some(Token::LParen) => {
+            Token::LParen => {
                 let inner = self.expr()?;
                 self.expect(Token::RParen, "')'")?;
                 Ok(inner)
@@ -166,15 +163,15 @@ impl Parser {
 
     fn args(&mut self) -> Result<Vec<Expr>, ParseError> {
         let mut args = Vec::new();
-        if self.peek() == Some(&Token::RParen) {
+        if self.peek() == &Token::RParen {
             self.advance();
             return Ok(args);
         }
         loop {
             args.push(self.expr()?);
             match self.advance() {
-                Some(Token::Comma) => {}
-                Some(Token::RParen) => return Ok(args),
+                Token::Comma => {}
+                Token::RParen => return Ok(args),
                 other => {
                     return Err(ParseError::Expected {
                         what: "',' or ')'",
@@ -185,19 +182,21 @@ impl Parser {
         }
     }
 
-    fn peek(&self) -> Option<&Token> {
-        self.tokens.get(self.pos)
+    fn peek(&self) -> &Token {
+        &self.tokens[self.pos]
     }
 
-    fn advance(&mut self) -> Option<Token> {
-        let token = self.peek().cloned()?;
-        self.pos += 1;
-        Some(token)
+    fn advance(&mut self) -> Token {
+        let token = self.peek().clone();
+        if token != Token::Eof {
+            self.pos += 1;
+        }
+        token
     }
 
     fn expect(&mut self, expected: Token, what: &'static str) -> Result<(), ParseError> {
         match self.advance() {
-            Some(token) if token == expected => Ok(()),
+            token if token == expected => Ok(()),
             other => Err(ParseError::Expected { what, found: other }),
         }
     }
@@ -218,7 +217,7 @@ mod tests {
             .map(|program| program.expr.expect("program should end with an expression"))
     }
 
-    fn expected(what: &'static str, found: Option<Token>) -> ParseError {
+    fn expected(what: &'static str, found: Token) -> ParseError {
         ParseError::Expected { what, found }
     }
 
@@ -448,11 +447,11 @@ mod tests {
     #[test]
     fn error_messages() {
         assert_eq!(
-            expected("')'", Some(Token::Int(42))).to_string(),
+            expected("')'", Token::Int(42)).to_string(),
             "expected ')', found '42'"
         );
         assert_eq!(
-            expected("expression", None).to_string(),
+            expected("expression", Token::Eof).to_string(),
             "expected expression, found end of input"
         );
         assert_eq!(
@@ -467,12 +466,12 @@ mod tests {
 
     #[test]
     fn unclosed_paren() {
-        assert_eq!(parse("(42"), Err(expected("')'", None)));
+        assert_eq!(parse("(42"), Err(expected("')'", Token::Eof)));
     }
 
     #[test]
     fn wrong_token_instead_of_closing_paren() {
-        assert_eq!(parse("(42 42"), Err(expected("')'", Some(Token::Int(42)))));
+        assert_eq!(parse("(42 42"), Err(expected("')'", Token::Int(42))));
     }
 
     #[test]
@@ -487,25 +486,22 @@ mod tests {
 
     #[test]
     fn empty_parens() {
-        assert_eq!(
-            parse("()"),
-            Err(expected("expression", Some(Token::RParen)))
-        );
+        assert_eq!(parse("()"), Err(expected("expression", Token::RParen)));
     }
 
     #[test]
     fn missing_right_operand() {
-        assert_eq!(parse("1 +"), Err(expected("expression", None)));
+        assert_eq!(parse("1 +"), Err(expected("expression", Token::Eof)));
     }
 
     #[test]
     fn missing_left_operand() {
-        assert_eq!(parse("* 2"), Err(expected("expression", Some(Token::Star))));
+        assert_eq!(parse("* 2"), Err(expected("expression", Token::Star)));
     }
 
     #[test]
     fn unary_minus_without_operand() {
-        assert_eq!(parse("-"), Err(expected("expression", None)));
+        assert_eq!(parse("-"), Err(expected("expression", Token::Eof)));
     }
 
     #[test]
@@ -526,30 +522,24 @@ mod tests {
 
     #[test]
     fn unclosed_call() {
-        assert_eq!(parse("f(1"), Err(expected("',' or ')'", None)));
+        assert_eq!(parse("f(1"), Err(expected("',' or ')'", Token::Eof)));
     }
 
     #[test]
     fn call_arguments_without_comma() {
-        assert_eq!(
-            parse("f(1 2)"),
-            Err(expected("',' or ')'", Some(Token::Int(2))))
-        );
+        assert_eq!(parse("f(1 2)"), Err(expected("',' or ')'", Token::Int(2))));
     }
 
     #[test]
     fn call_trailing_comma() {
-        assert_eq!(
-            parse("f(1,)"),
-            Err(expected("expression", Some(Token::RParen)))
-        );
+        assert_eq!(parse("f(1,)"), Err(expected("expression", Token::RParen)));
     }
 
     #[test]
     fn let_without_name() {
         assert_eq!(
             parse_program("let = 1;"),
-            Err(expected("variable name after 'let'", Some(Token::Eq)))
+            Err(expected("variable name after 'let'", Token::Eq))
         );
     }
 
@@ -565,13 +555,13 @@ mod tests {
     fn let_without_eq() {
         assert_eq!(
             parse_program("let x 1;"),
-            Err(expected("'='", Some(Token::Int(1))))
+            Err(expected("'='", Token::Int(1)))
         );
     }
 
     #[test]
     fn let_without_semicolon() {
-        assert_eq!(parse_program("let x = 1"), Err(expected("';'", None)));
+        assert_eq!(parse_program("let x = 1"), Err(expected("';'", Token::Eof)));
     }
 
     #[test]
