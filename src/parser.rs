@@ -1,38 +1,58 @@
 use std::fmt;
 
 use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
-use crate::lexer::Token;
+use crate::lexer::{Located, Pos, Token};
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ParseError {
+pub struct ParseError {
+    pub kind: ParseErrorKind,
+    pub pos: Pos,
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}: {}", self.pos, self.kind)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParseErrorKind {
     Expected { what: &'static str, found: Token },
     Unexpected(Token),
     IntegerTooLarge,
 }
 
-impl fmt::Display for ParseError {
+impl ParseErrorKind {
+    fn at(self, pos: Pos) -> ParseError {
+        ParseError { kind: self, pos }
+    }
+}
+
+impl fmt::Display for ParseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ParseError::Expected {
+            ParseErrorKind::Expected {
                 what,
                 found: Token::Eof,
             } => {
                 write!(f, "expected {what}, found end of input")
             }
-            ParseError::Expected { what, found } => write!(f, "expected {what}, found '{found}'"),
-            ParseError::Unexpected(token) => write!(f, "unexpected '{token}'"),
-            ParseError::IntegerTooLarge => write!(f, "integer literal is too large"),
+            ParseErrorKind::Expected { what, found } => {
+                write!(f, "expected {what}, found '{found}'")
+            }
+            ParseErrorKind::Unexpected(token) => write!(f, "unexpected '{token}'"),
+            ParseErrorKind::IntegerTooLarge => write!(f, "integer literal is too large"),
         }
     }
 }
 
 pub struct Parser {
-    tokens: Vec<Token>,
+    tokens: Vec<Located>,
     pos: usize,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<Token>) -> Self {
+    pub fn new(tokens: Vec<Located>) -> Self {
         Self { tokens, pos: 0 }
     }
 
@@ -56,20 +76,22 @@ impl Parser {
             }
         }
         if self.peek() != &Token::Eof {
-            return Err(ParseError::Unexpected(self.peek().clone()));
+            return Err(ParseErrorKind::Unexpected(self.peek().clone()).at(self.peek_pos()));
         }
         Ok(Program { stmts, expr })
     }
 
     fn let_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.advance();
+        let pos = self.peek_pos();
         let name = match self.advance() {
             Token::Ident(name) => name,
             other => {
-                return Err(ParseError::Expected {
+                return Err(ParseErrorKind::Expected {
                     what: "variable name after 'let'",
                     found: other,
-                });
+                }
+                .at(pos));
             }
         };
         self.expect(Token::Eq, "'='")?;
@@ -135,9 +157,11 @@ impl Parser {
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
+        let pos = self.peek_pos();
         match self.advance() {
             Token::Int(n) => {
-                let value = i64::try_from(n).map_err(|_| ParseError::IntegerTooLarge)?;
+                let value =
+                    i64::try_from(n).map_err(|_| ParseErrorKind::IntegerTooLarge.at(pos))?;
                 Ok(Expr::Int(value))
             }
             Token::Ident(name) => {
@@ -154,10 +178,11 @@ impl Parser {
                 self.expect(Token::RParen, "')'")?;
                 Ok(inner)
             }
-            other => Err(ParseError::Expected {
+            other => Err(ParseErrorKind::Expected {
                 what: "expression",
                 found: other,
-            }),
+            }
+            .at(pos)),
         }
     }
 
@@ -169,21 +194,27 @@ impl Parser {
         }
         loop {
             args.push(self.expr()?);
+            let pos = self.peek_pos();
             match self.advance() {
                 Token::Comma => {}
                 Token::RParen => return Ok(args),
                 other => {
-                    return Err(ParseError::Expected {
+                    return Err(ParseErrorKind::Expected {
                         what: "',' or ')'",
                         found: other,
-                    });
+                    }
+                    .at(pos));
                 }
             }
         }
     }
 
     fn peek(&self) -> &Token {
-        &self.tokens[self.pos]
+        &self.tokens[self.pos].token
+    }
+
+    fn peek_pos(&self) -> Pos {
+        self.tokens[self.pos].pos
     }
 
     fn advance(&mut self) -> Token {
@@ -195,9 +226,10 @@ impl Parser {
     }
 
     fn expect(&mut self, expected: Token, what: &'static str) -> Result<(), ParseError> {
+        let pos = self.peek_pos();
         match self.advance() {
             token if token == expected => Ok(()),
-            other => Err(ParseError::Expected { what, found: other }),
+            other => Err(ParseErrorKind::Expected { what, found: other }.at(pos)),
         }
     }
 }
@@ -217,8 +249,12 @@ mod tests {
             .map(|program| program.expr.expect("program should end with an expression"))
     }
 
-    fn expected(what: &'static str, found: Token) -> ParseError {
-        ParseError::Expected { what, found }
+    fn expected(what: &'static str, found: Token) -> ParseErrorKind {
+        ParseErrorKind::Expected { what, found }
+    }
+
+    fn at(kind: ParseErrorKind, line: usize, col: usize) -> ParseError {
+        kind.at(Pos { line, col })
     }
 
     fn int(n: i64) -> Expr {
@@ -455,60 +491,85 @@ mod tests {
             "expected expression, found end of input"
         );
         assert_eq!(
-            ParseError::Unexpected(Token::Let).to_string(),
+            ParseErrorKind::Unexpected(Token::Let).to_string(),
             "unexpected 'let'"
         );
         assert_eq!(
-            ParseError::IntegerTooLarge.to_string(),
+            ParseErrorKind::IntegerTooLarge.to_string(),
             "integer literal is too large"
+        );
+        assert_eq!(
+            at(expected("expression", Token::Eof), 1, 4).to_string(),
+            "1:4: expected expression, found end of input"
         );
     }
 
     #[test]
     fn unclosed_paren() {
-        assert_eq!(parse("(42"), Err(expected("')'", Token::Eof)));
+        assert_eq!(parse("(42"), Err(at(expected("')'", Token::Eof), 1, 4)));
     }
 
     #[test]
     fn wrong_token_instead_of_closing_paren() {
-        assert_eq!(parse("(42 42"), Err(expected("')'", Token::Int(42))));
+        assert_eq!(
+            parse("(42 42"),
+            Err(at(expected("')'", Token::Int(42)), 1, 5))
+        );
     }
 
     #[test]
     fn extra_closing_paren() {
-        assert_eq!(parse("42)"), Err(ParseError::Unexpected(Token::RParen)));
+        assert_eq!(
+            parse("42)"),
+            Err(at(ParseErrorKind::Unexpected(Token::RParen), 1, 3))
+        );
     }
 
     #[test]
     fn trailing_tokens() {
-        assert_eq!(parse("1 2"), Err(ParseError::Unexpected(Token::Int(2))));
+        assert_eq!(
+            parse("1 2"),
+            Err(at(ParseErrorKind::Unexpected(Token::Int(2)), 1, 3))
+        );
     }
 
     #[test]
     fn empty_parens() {
-        assert_eq!(parse("()"), Err(expected("expression", Token::RParen)));
+        assert_eq!(
+            parse("()"),
+            Err(at(expected("expression", Token::RParen), 1, 2))
+        );
     }
 
     #[test]
     fn missing_right_operand() {
-        assert_eq!(parse("1 +"), Err(expected("expression", Token::Eof)));
+        assert_eq!(
+            parse("1 +"),
+            Err(at(expected("expression", Token::Eof), 1, 4))
+        );
     }
 
     #[test]
     fn missing_left_operand() {
-        assert_eq!(parse("* 2"), Err(expected("expression", Token::Star)));
+        assert_eq!(
+            parse("* 2"),
+            Err(at(expected("expression", Token::Star), 1, 1))
+        );
     }
 
     #[test]
     fn unary_minus_without_operand() {
-        assert_eq!(parse("-"), Err(expected("expression", Token::Eof)));
+        assert_eq!(
+            parse("-"),
+            Err(at(expected("expression", Token::Eof), 1, 2))
+        );
     }
 
     #[test]
     fn literal_too_large() {
         assert_eq!(
             parse("9223372036854775808"),
-            Err(ParseError::IntegerTooLarge)
+            Err(at(ParseErrorKind::IntegerTooLarge, 1, 1))
         );
     }
 
@@ -516,30 +577,39 @@ mod tests {
     fn min_value_literal_in_parens_is_too_large() {
         assert_eq!(
             parse("-(9223372036854775808)"),
-            Err(ParseError::IntegerTooLarge)
+            Err(at(ParseErrorKind::IntegerTooLarge, 1, 3))
         );
     }
 
     #[test]
     fn unclosed_call() {
-        assert_eq!(parse("f(1"), Err(expected("',' or ')'", Token::Eof)));
+        assert_eq!(
+            parse("f(1"),
+            Err(at(expected("',' or ')'", Token::Eof), 1, 4))
+        );
     }
 
     #[test]
     fn call_arguments_without_comma() {
-        assert_eq!(parse("f(1 2)"), Err(expected("',' or ')'", Token::Int(2))));
+        assert_eq!(
+            parse("f(1 2)"),
+            Err(at(expected("',' or ')'", Token::Int(2)), 1, 5))
+        );
     }
 
     #[test]
     fn call_trailing_comma() {
-        assert_eq!(parse("f(1,)"), Err(expected("expression", Token::RParen)));
+        assert_eq!(
+            parse("f(1,)"),
+            Err(at(expected("expression", Token::RParen), 1, 5))
+        );
     }
 
     #[test]
     fn let_without_name() {
         assert_eq!(
             parse_program("let = 1;"),
-            Err(expected("variable name after 'let'", Token::Eq))
+            Err(at(expected("variable name after 'let'", Token::Eq), 1, 5))
         );
     }
 
@@ -547,7 +617,7 @@ mod tests {
     fn missing_semicolon_between_expressions() {
         assert_eq!(
             parse_program("1 2;"),
-            Err(ParseError::Unexpected(Token::Int(2)))
+            Err(at(ParseErrorKind::Unexpected(Token::Int(2)), 1, 3))
         );
     }
 
@@ -555,20 +625,23 @@ mod tests {
     fn let_without_eq() {
         assert_eq!(
             parse_program("let x 1;"),
-            Err(expected("'='", Token::Int(1)))
+            Err(at(expected("'='", Token::Int(1)), 1, 7))
         );
     }
 
     #[test]
     fn let_without_semicolon() {
-        assert_eq!(parse_program("let x = 1"), Err(expected("';'", Token::Eof)));
+        assert_eq!(
+            parse_program("let x = 1"),
+            Err(at(expected("';'", Token::Eof), 1, 10))
+        );
     }
 
     #[test]
     fn let_after_expression() {
         assert_eq!(
             parse_program("1 let x = 2;"),
-            Err(ParseError::Unexpected(Token::Let))
+            Err(at(ParseErrorKind::Unexpected(Token::Let), 1, 3))
         );
     }
 }

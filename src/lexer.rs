@@ -37,11 +37,44 @@ impl fmt::Display for Token {
     }
 }
 
-pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pos {
+    pub line: usize,
+    pub col: usize,
+}
+
+impl Pos {
+    fn advance(&mut self, c: char) {
+        if c == '\n' {
+            self.line += 1;
+            self.col = 1;
+        } else {
+            self.col += 1;
+        }
+    }
+}
+
+impl fmt::Display for Pos {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}:{}", self.line, self.col)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Located {
+    pub token: Token,
+    pub pos: Pos,
+}
+
+pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
     let mut tokens = Vec::new();
     let mut chars = input.chars().peekable();
+    let mut pos = Pos { line: 1, col: 1 };
+    let mut end = pos;
 
     while let Some(c) = chars.next() {
+        let start = pos;
+        pos.advance(c);
         let token = match c {
             _ if c.is_whitespace() => continue,
             '+' => Token::Plus,
@@ -58,10 +91,11 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 while let Some(&d) = chars.peek() {
                     let Some(digit) = d.to_digit(10) else { break };
                     chars.next();
+                    pos.advance(d);
                     value = value
                         .checked_mul(10)
                         .and_then(|v| v.checked_add(u64::from(digit)))
-                        .ok_or("integer literal is too large")?;
+                        .ok_or_else(|| format!("{start}: integer literal is too large"))?;
                 }
                 Token::Int(value)
             }
@@ -73,25 +107,34 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     }
                     name.push(d);
                     chars.next();
+                    pos.advance(d);
                 }
                 match name.as_str() {
                     "let" => Token::Let,
                     _ => Token::Ident(name),
                 }
             }
-            _ => return Err(format!("unexpected character: '{c}'")),
+            _ => return Err(format!("{start}: unexpected character: '{c}'")),
         };
 
-        tokens.push(token);
+        tokens.push(Located { token, pos: start });
+        end = pos;
     }
 
-    tokens.push(Token::Eof);
+    tokens.push(Located {
+        token: Token::Eof,
+        pos: end,
+    });
     Ok(tokens)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tokens(input: &str) -> Result<Vec<Token>, String> {
+        tokenize(input).map(|tokens| tokens.into_iter().map(|t| t.token).collect())
+    }
 
     fn ident(name: &str) -> Token {
         Token::Ident(name.to_string())
@@ -100,7 +143,7 @@ mod tests {
     #[test]
     fn single_char_tokens() {
         assert_eq!(
-            tokenize("+-*/()"),
+            tokens("+-*/()"),
             Ok(vec![
                 Token::Plus,
                 Token::Minus,
@@ -116,7 +159,7 @@ mod tests {
     #[test]
     fn integers() {
         assert_eq!(
-            tokenize("0 42 123"),
+            tokens("0 42 123"),
             Ok(vec![
                 Token::Int(0),
                 Token::Int(42),
@@ -129,7 +172,7 @@ mod tests {
     #[test]
     fn expression() {
         assert_eq!(
-            tokenize("12 + (3*4)"),
+            tokens("12 + (3*4)"),
             Ok(vec![
                 Token::Int(12),
                 Token::Plus,
@@ -146,25 +189,25 @@ mod tests {
     #[test]
     fn number_followed_by_operator() {
         assert_eq!(
-            tokenize("123+"),
+            tokens("123+"),
             Ok(vec![Token::Int(123), Token::Plus, Token::Eof])
         );
     }
 
     #[test]
     fn skips_whitespace() {
-        assert_eq!(tokenize(" \t\r\n42 "), Ok(vec![Token::Int(42), Token::Eof]));
+        assert_eq!(tokens(" \t\r\n42 "), Ok(vec![Token::Int(42), Token::Eof]));
     }
 
     #[test]
     fn empty_input() {
-        assert_eq!(tokenize(""), Ok(vec![Token::Eof]));
+        assert_eq!(tokens(""), Ok(vec![Token::Eof]));
     }
 
     #[test]
     fn max_u64() {
         assert_eq!(
-            tokenize("18446744073709551615"),
+            tokens("18446744073709551615"),
             Ok(vec![Token::Int(u64::MAX), Token::Eof])
         );
     }
@@ -172,7 +215,7 @@ mod tests {
     #[test]
     fn identifiers() {
         assert_eq!(
-            tokenize("x foo_bar _tmp x1"),
+            tokens("x foo_bar _tmp x1"),
             Ok(vec![
                 ident("x"),
                 ident("foo_bar"),
@@ -185,18 +228,18 @@ mod tests {
 
     #[test]
     fn let_keyword() {
-        assert_eq!(tokenize("let"), Ok(vec![Token::Let, Token::Eof]));
+        assert_eq!(tokens("let"), Ok(vec![Token::Let, Token::Eof]));
     }
 
     #[test]
     fn keyword_prefix_is_identifier() {
-        assert_eq!(tokenize("letter"), Ok(vec![ident("letter"), Token::Eof]));
+        assert_eq!(tokens("letter"), Ok(vec![ident("letter"), Token::Eof]));
     }
 
     #[test]
     fn let_statement() {
         assert_eq!(
-            tokenize("let x = 1;"),
+            tokens("let x = 1;"),
             Ok(vec![
                 Token::Let,
                 ident("x"),
@@ -211,7 +254,7 @@ mod tests {
     #[test]
     fn digit_then_letters() {
         assert_eq!(
-            tokenize("1x"),
+            tokens("1x"),
             Ok(vec![Token::Int(1), ident("x"), Token::Eof])
         );
     }
@@ -219,7 +262,7 @@ mod tests {
     #[test]
     fn call_tokens() {
         assert_eq!(
-            tokenize("f(x, 1)"),
+            tokens("f(x, 1)"),
             Ok(vec![
                 ident("f"),
                 Token::LParen,
@@ -235,7 +278,7 @@ mod tests {
     #[test]
     fn display_round_trip() {
         let source = "let x = f ( 1 , y ) * 2 / 3 - 4 + 5 ;";
-        let tokens = tokenize(source).unwrap();
+        let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens
             .iter()
             .filter(|t| **t != Token::Eof)
@@ -245,18 +288,33 @@ mod tests {
     }
 
     #[test]
+    fn positions() {
+        let positions: Vec<String> = tokenize("let x =\n  f(42);\n")
+            .unwrap()
+            .iter()
+            .map(|t| t.pos.to_string())
+            .collect();
+        assert_eq!(
+            positions,
+            [
+                "1:1", "1:5", "1:7", "2:3", "2:4", "2:5", "2:7", "2:8", "2:9"
+            ],
+        );
+    }
+
+    #[test]
     fn integer_overflow() {
         assert_eq!(
-            tokenize("18446744073709551616"),
-            Err("integer literal is too large".to_string())
+            tokens("18446744073709551616"),
+            Err("1:1: integer literal is too large".to_string())
         );
     }
 
     #[test]
     fn unexpected_character() {
         assert_eq!(
-            tokenize("1 $ 2"),
-            Err("unexpected character: '$'".to_string())
+            tokens("1 $ 2"),
+            Err("1:3: unexpected character: '$'".to_string())
         );
     }
 }

@@ -5,6 +5,7 @@
 ### Changed
 - Error messages show tokens as written: `unexpected ')'` instead of `unexpected token: RParen`
 - Parse errors say what was expected and what was found: `expected ')', found end of input`
+- Errors report line and column: `1:4: expected expression, found end of input`
 
 ## [0.3.0] - 2026-11-13
 
