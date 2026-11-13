@@ -52,23 +52,12 @@ impl<W: Write> Interpreter<W> {
                 self.call(name, &args)
             }
             Expr::Binary { op, left, right } => {
-                let l = self.eval_int(left)?;
-                let r = self.eval_int(right)?;
-                let result = match op {
-                    BinaryOp::Add => l.checked_add(r),
-                    BinaryOp::Sub => l.checked_sub(r),
-                    BinaryOp::Mul => l.checked_mul(r),
-                    BinaryOp::Div => {
-                        if r == 0 {
-                            return Err("division by zero".to_string());
-                        }
-                        l.checked_div(r)
-                    }
-                };
-                result.map(Value::Int).ok_or("integer overflow".to_string())
+                let l = self.eval(left)?;
+                let r = self.eval(right)?;
+                binary(op, l, r)
             }
             Expr::Unary { op, operand } => {
-                let value = self.eval_int(operand)?;
+                let value = int(self.eval(operand)?)?;
                 let result = match op {
                     UnaryOp::Neg => value.checked_neg(),
                 };
@@ -89,13 +78,47 @@ impl<W: Write> Interpreter<W> {
             _ => Err(format!("undefined function: {name}")),
         }
     }
+}
 
-    fn eval_int(&mut self, expr: &Expr) -> Result<i64, String> {
-        match self.eval(expr)? {
-            Value::Int(n) => Ok(n),
-            other => Err(format!("expected integer, got {other}")),
+fn binary(op: &BinaryOp, l: Value, r: Value) -> Result<Value, String> {
+    match op {
+        BinaryOp::Eq => Ok(Value::Bool(equal(l, r)?)),
+        BinaryOp::Ne => Ok(Value::Bool(!equal(l, r)?)),
+        BinaryOp::Lt => Ok(Value::Bool(int(l)? < int(r)?)),
+        BinaryOp::Le => Ok(Value::Bool(int(l)? <= int(r)?)),
+        BinaryOp::Gt => Ok(Value::Bool(int(l)? > int(r)?)),
+        BinaryOp::Ge => Ok(Value::Bool(int(l)? >= int(r)?)),
+        BinaryOp::Add => checked(int(l)?.checked_add(int(r)?)),
+        BinaryOp::Sub => checked(int(l)?.checked_sub(int(r)?)),
+        BinaryOp::Mul => checked(int(l)?.checked_mul(int(r)?)),
+        BinaryOp::Div => {
+            let (l, r) = (int(l)?, int(r)?);
+            if r == 0 {
+                return Err("division by zero".to_string());
+            }
+            checked(l.checked_div(r))
         }
     }
+}
+
+fn equal(l: Value, r: Value) -> Result<bool, String> {
+    match (l, r) {
+        (Value::Int(a), Value::Int(b)) => Ok(a == b),
+        (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
+        (Value::Unit, Value::Unit) => Ok(true),
+        (l, r) => Err(format!("cannot compare {l} with {r}")),
+    }
+}
+
+fn int(value: Value) -> Result<i64, String> {
+    match value {
+        Value::Int(n) => Ok(n),
+        other => Err(format!("expected integer, got {other}")),
+    }
+}
+
+fn checked(result: Option<i64>) -> Result<Value, String> {
+    result.map(Value::Int).ok_or("integer overflow".to_string())
 }
 
 #[cfg(test)]
@@ -200,6 +223,23 @@ mod tests {
     #[test]
     fn bool_variable() {
         assert_eq!(value("let b = true; b"), Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn comparisons() {
+        assert_eq!(value("1 < 2"), Ok(Value::Bool(true)));
+        assert_eq!(value("2 <= 2"), Ok(Value::Bool(true)));
+        assert_eq!(value("1 > 2"), Ok(Value::Bool(false)));
+        assert_eq!(value("1 >= 2"), Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn equality() {
+        assert_eq!(value("1 + 1 == 2"), Ok(Value::Bool(true)));
+        assert_eq!(value("1 != 2"), Ok(Value::Bool(true)));
+        assert_eq!(value("true == false"), Ok(Value::Bool(false)));
+        assert_eq!(value("(1 < 2) != false"), Ok(Value::Bool(true)));
+        assert_eq!(value("print(1) == print(2)"), Ok(Value::Bool(true)));
     }
 
     #[test]
@@ -314,6 +354,22 @@ mod tests {
     fn negation_of_bool() {
         assert_eq!(
             run("-false"),
+            Err("expected integer, got false".to_string())
+        );
+    }
+
+    #[test]
+    fn compare_int_with_bool() {
+        assert_eq!(
+            value("1 == true"),
+            Err("cannot compare 1 with true".to_string())
+        );
+    }
+
+    #[test]
+    fn ordering_of_bools() {
+        assert_eq!(
+            value("false < true"),
             Err("expected integer, got false".to_string())
         );
     }

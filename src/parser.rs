@@ -101,6 +101,30 @@ impl Parser {
     }
 
     fn expr(&mut self) -> Result<Expr, ParseError> {
+        self.comparison()
+    }
+
+    fn comparison(&mut self) -> Result<Expr, ParseError> {
+        let left = self.additive()?;
+        let op = match self.peek() {
+            Token::EqEq => BinaryOp::Eq,
+            Token::NotEq => BinaryOp::Ne,
+            Token::Lt => BinaryOp::Lt,
+            Token::LtEq => BinaryOp::Le,
+            Token::Gt => BinaryOp::Gt,
+            Token::GtEq => BinaryOp::Ge,
+            _ => return Ok(left),
+        };
+        self.advance();
+        let right = self.additive()?;
+        Ok(Expr::Binary {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
+        })
+    }
+
+    fn additive(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.term()?;
         loop {
             let op = match self.peek() {
@@ -240,7 +264,7 @@ impl Parser {
 mod tests {
     use super::*;
     use crate::lexer::tokenize;
-    use BinaryOp::{Add, Div, Mul, Sub};
+    use BinaryOp::{Add, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Sub};
 
     fn parse_program(input: &str) -> Result<Program, ParseError> {
         Parser::new(tokenize(input).unwrap()).parse()
@@ -389,6 +413,32 @@ mod tests {
     fn bool_literals() {
         assert_eq!(parse("true"), Ok(Expr::Bool(true)));
         assert_eq!(parse("false"), Ok(Expr::Bool(false)));
+    }
+
+    #[test]
+    fn comparison_binds_looser_than_arithmetic() {
+        assert_eq!(
+            parse("1 + 2 < 3 * 4"),
+            Ok(bin(Lt, bin(Add, int(1), int(2)), bin(Mul, int(3), int(4))))
+        );
+    }
+
+    #[test]
+    fn all_comparison_operators() {
+        assert_eq!(parse("1 == 2"), Ok(bin(Eq, int(1), int(2))));
+        assert_eq!(parse("1 != 2"), Ok(bin(Ne, int(1), int(2))));
+        assert_eq!(parse("1 < 2"), Ok(bin(Lt, int(1), int(2))));
+        assert_eq!(parse("1 <= 2"), Ok(bin(Le, int(1), int(2))));
+        assert_eq!(parse("1 > 2"), Ok(bin(Gt, int(1), int(2))));
+        assert_eq!(parse("1 >= 2"), Ok(bin(Ge, int(1), int(2))));
+    }
+
+    #[test]
+    fn parenthesized_comparison() {
+        assert_eq!(
+            parse("(1 < 2) == true"),
+            Ok(bin(Eq, bin(Lt, int(1), int(2)), Expr::Bool(true)))
+        );
     }
 
     #[test]
@@ -650,6 +700,14 @@ mod tests {
         assert_eq!(
             parse_program("1 let x = 2;"),
             Err(at(ParseErrorKind::Unexpected(Token::Let), 1, 3))
+        );
+    }
+
+    #[test]
+    fn chained_comparison() {
+        assert_eq!(
+            parse("1 < 2 < 3"),
+            Err(at(ParseErrorKind::Unexpected(Token::Lt), 1, 7))
         );
     }
 }

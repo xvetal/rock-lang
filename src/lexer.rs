@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, iter::Peekable, str::Chars};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -12,6 +12,12 @@ pub enum Token {
     Star,
     Slash,
     Eq,
+    EqEq,
+    NotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
     Semicolon,
     Comma,
     LParen,
@@ -32,6 +38,12 @@ impl fmt::Display for Token {
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
             Token::Eq => write!(f, "="),
+            Token::EqEq => write!(f, "=="),
+            Token::NotEq => write!(f, "!="),
+            Token::Lt => write!(f, "<"),
+            Token::LtEq => write!(f, "<="),
+            Token::Gt => write!(f, ">"),
+            Token::GtEq => write!(f, ">="),
             Token::Semicolon => write!(f, ";"),
             Token::Comma => write!(f, ","),
             Token::LParen => write!(f, "("),
@@ -85,7 +97,13 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
             '-' => Token::Minus,
             '*' => Token::Star,
             '/' => Token::Slash,
+            '=' if eat(&mut chars, &mut pos, '=') => Token::EqEq,
             '=' => Token::Eq,
+            '!' if eat(&mut chars, &mut pos, '=') => Token::NotEq,
+            '<' if eat(&mut chars, &mut pos, '=') => Token::LtEq,
+            '<' => Token::Lt,
+            '>' if eat(&mut chars, &mut pos, '=') => Token::GtEq,
+            '>' => Token::Gt,
             ';' => Token::Semicolon,
             ',' => Token::Comma,
             '(' => Token::LParen,
@@ -132,6 +150,14 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
         pos: end,
     });
     Ok(tokens)
+}
+
+fn eat(chars: &mut Peekable<Chars>, pos: &mut Pos, expected: char) -> bool {
+    let matched = chars.next_if_eq(&expected).is_some();
+    if matched {
+        pos.advance(expected);
+    }
+    matched
 }
 
 #[cfg(test)]
@@ -290,8 +316,35 @@ mod tests {
     }
 
     #[test]
+    fn comparison_tokens() {
+        assert_eq!(
+            tokens("== != < <= > >= = ="),
+            Ok(vec![
+                Token::EqEq,
+                Token::NotEq,
+                Token::Lt,
+                Token::LtEq,
+                Token::Gt,
+                Token::GtEq,
+                Token::Eq,
+                Token::Eq,
+                Token::Eof
+            ])
+        );
+    }
+
+    #[test]
+    fn comparison_without_spaces() {
+        assert_eq!(
+            tokens("1 <= 2"),
+            Ok(vec![Token::Int(1), Token::LtEq, Token::Int(2), Token::Eof])
+        );
+    }
+
+    #[test]
     fn display_round_trip() {
-        let source = "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 ;";
+        let source =
+            "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 == 6 != 7 < 8 <= 9 > 10 >= 11 ;";
         let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens
             .iter()
@@ -299,6 +352,16 @@ mod tests {
             .map(|t| t.to_string())
             .collect();
         assert_eq!(printed.join(" "), source);
+    }
+
+    #[test]
+    fn positions_after_two_char_token() {
+        let positions: Vec<String> = tokenize("a <= b")
+            .unwrap()
+            .iter()
+            .map(|t| t.pos.to_string())
+            .collect();
+        assert_eq!(positions, ["1:1", "1:3", "1:6", "1:7"]);
     }
 
     #[test]
@@ -329,6 +392,14 @@ mod tests {
         assert_eq!(
             tokens("1 $ 2"),
             Err("1:3: unexpected character: '$'".to_string())
+        );
+    }
+
+    #[test]
+    fn bang_without_eq() {
+        assert_eq!(
+            tokens("!true"),
+            Err("1:1: unexpected character: '!'".to_string())
         );
     }
 }

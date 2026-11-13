@@ -4,6 +4,12 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 }
 
 #[derive(Debug, Clone, PartialEq)]
