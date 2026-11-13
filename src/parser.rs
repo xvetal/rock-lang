@@ -40,7 +40,7 @@ impl Parser {
         self.advance();
         let name = match self.advance() {
             Some(Token::Ident(name)) => name,
-            _ => return Err("expected variable name after 'let'".to_string()),
+            other => return Err(error_expected("variable name after 'let'", other.as_ref())),
         };
         self.expect(Token::Eq, "'='")?;
         let value = self.expr()?;
@@ -125,8 +125,7 @@ impl Parser {
                 self.expect(Token::RParen, "')'")?;
                 Ok(inner)
             }
-            Some(token) => Err(format!("unexpected '{token}'")),
-            None => Err("unexpected end of input".to_string()),
+            other => Err(error_expected("expression", other.as_ref())),
         }
     }
 
@@ -141,7 +140,7 @@ impl Parser {
             match self.advance() {
                 Some(Token::Comma) => {}
                 Some(Token::RParen) => return Ok(args),
-                _ => return Err("expected ',' or ')'".to_string()),
+                other => return Err(error_expected("',' or ')'", other.as_ref())),
             }
         }
     }
@@ -159,8 +158,15 @@ impl Parser {
     fn expect(&mut self, expected: Token, what: &str) -> Result<(), String> {
         match self.advance() {
             Some(token) if token == expected => Ok(()),
-            _ => Err(format!("expected {what}")),
+            other => Err(error_expected(what, other.as_ref())),
         }
+    }
+}
+
+fn error_expected(what: &str, found: Option<&Token>) -> String {
+    match found {
+        Some(token) => format!("expected {what}, found '{token}'"),
+        None => format!("expected {what}, found end of input"),
     }
 }
 
@@ -404,12 +410,15 @@ mod tests {
 
     #[test]
     fn unclosed_paren() {
-        assert_eq!(parse("(42"), Err("expected ')'".to_string()));
+        assert_eq!(
+            parse("(42"),
+            Err("expected ')', found end of input".to_string())
+        );
     }
 
     #[test]
     fn wrong_token_instead_of_closing_paren() {
-        assert_eq!(parse("(42 42"), Err("expected ')'".to_string()));
+        assert_eq!(parse("(42 42"), Err("expected ')', found '42'".to_string()));
     }
 
     #[test]
@@ -424,22 +433,34 @@ mod tests {
 
     #[test]
     fn empty_parens() {
-        assert_eq!(parse("()"), Err("unexpected ')'".to_string()));
+        assert_eq!(
+            parse("()"),
+            Err("expected expression, found ')'".to_string())
+        );
     }
 
     #[test]
     fn missing_right_operand() {
-        assert_eq!(parse("1 +"), Err("unexpected end of input".to_string()));
+        assert_eq!(
+            parse("1 +"),
+            Err("expected expression, found end of input".to_string())
+        );
     }
 
     #[test]
     fn missing_left_operand() {
-        assert_eq!(parse("* 2"), Err("unexpected '*'".to_string()));
+        assert_eq!(
+            parse("* 2"),
+            Err("expected expression, found '*'".to_string())
+        );
     }
 
     #[test]
     fn unary_minus_without_operand() {
-        assert_eq!(parse("-"), Err("unexpected end of input".to_string()));
+        assert_eq!(
+            parse("-"),
+            Err("expected expression, found end of input".to_string())
+        );
     }
 
     #[test]
@@ -460,24 +481,33 @@ mod tests {
 
     #[test]
     fn unclosed_call() {
-        assert_eq!(parse("f(1"), Err("expected ',' or ')'".to_string()));
+        assert_eq!(
+            parse("f(1"),
+            Err("expected ',' or ')', found end of input".to_string())
+        );
     }
 
     #[test]
     fn call_arguments_without_comma() {
-        assert_eq!(parse("f(1 2)"), Err("expected ',' or ')'".to_string()));
+        assert_eq!(
+            parse("f(1 2)"),
+            Err("expected ',' or ')', found '2'".to_string())
+        );
     }
 
     #[test]
     fn call_trailing_comma() {
-        assert_eq!(parse("f(1,)"), Err("unexpected ')'".to_string()));
+        assert_eq!(
+            parse("f(1,)"),
+            Err("expected expression, found ')'".to_string())
+        );
     }
 
     #[test]
     fn let_without_name() {
         assert_eq!(
             parse_program("let = 1;"),
-            Err("expected variable name after 'let'".to_string())
+            Err("expected variable name after 'let', found '='".to_string())
         );
     }
 
@@ -488,12 +518,18 @@ mod tests {
 
     #[test]
     fn let_without_eq() {
-        assert_eq!(parse_program("let x 1;"), Err("expected '='".to_string()));
+        assert_eq!(
+            parse_program("let x 1;"),
+            Err("expected '=', found '1'".to_string())
+        );
     }
 
     #[test]
     fn let_without_semicolon() {
-        assert_eq!(parse_program("let x = 1"), Err("expected ';'".to_string()));
+        assert_eq!(
+            parse_program("let x = 1"),
+            Err("expected ';', found end of input".to_string())
+        );
     }
 
     #[test]
