@@ -164,6 +164,8 @@ impl Parser {
                     i64::try_from(n).map_err(|_| ParseErrorKind::IntegerTooLarge.at(pos))?;
                 Ok(Expr::Int(value))
             }
+            Token::True => Ok(Expr::Bool(true)),
+            Token::False => Ok(Expr::Bool(false)),
             Token::Ident(name) => {
                 if self.peek() == &Token::LParen {
                     self.advance();
@@ -381,6 +383,12 @@ mod tests {
     #[test]
     fn min_value_literal() {
         assert_eq!(parse("-9223372036854775808"), Ok(int(i64::MIN)));
+    }
+
+    #[test]
+    fn bool_literals() {
+        assert_eq!(parse("true"), Ok(Expr::Bool(true)));
+        assert_eq!(parse("false"), Ok(Expr::Bool(false)));
     }
 
     #[test]

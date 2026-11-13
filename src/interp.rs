@@ -38,6 +38,7 @@ impl<W: Write> Interpreter<W> {
     fn eval(&mut self, expr: &Expr) -> Result<Value, String> {
         match expr {
             Expr::Int(n) => Ok(Value::Int(*n)),
+            Expr::Bool(b) => Ok(Value::Bool(*b)),
             Expr::Var(name) => self
                 .vars
                 .get(name)
@@ -106,6 +107,10 @@ mod tests {
     fn exec(interp: &mut Interpreter<Vec<u8>>, input: &str) -> Result<Value, String> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
         interp.run(&program)
+    }
+
+    fn value(input: &str) -> Result<Value, String> {
+        exec(&mut Interpreter::new(Vec::new()), input)
     }
 
     fn run(input: &str) -> Result<i64, String> {
@@ -187,6 +192,17 @@ mod tests {
     }
 
     #[test]
+    fn bool_literals() {
+        assert_eq!(value("true"), Ok(Value::Bool(true)));
+        assert_eq!(value("false"), Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn bool_variable() {
+        assert_eq!(value("let b = true; b"), Ok(Value::Bool(true)));
+    }
+
+    #[test]
     fn let_bindings() {
         assert_eq!(run("let x = 1 + 2; let y = x * 3; y - 1"), Ok(8));
     }
@@ -225,6 +241,11 @@ mod tests {
             output("let x = 1 + 2 * 3; print(x);"),
             Ok("7\n".to_string())
         );
+    }
+
+    #[test]
+    fn print_bool() {
+        assert_eq!(output("print(false);"), Ok("false\n".to_string()));
     }
 
     #[test]
@@ -278,6 +299,22 @@ mod tests {
         assert_eq!(
             run("print(1) + 1"),
             Err("expected integer, got ()".to_string())
+        );
+    }
+
+    #[test]
+    fn bool_in_arithmetic() {
+        assert_eq!(
+            run("true + 1"),
+            Err("expected integer, got true".to_string())
+        );
+    }
+
+    #[test]
+    fn negation_of_bool() {
+        assert_eq!(
+            run("-false"),
+            Err("expected integer, got false".to_string())
         );
     }
 

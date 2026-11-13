@@ -14,6 +14,7 @@ pub enum UnaryOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Int(i64),
+    Bool(bool),
     Var(String),
     Call {
         name: String,

@@ -5,6 +5,8 @@ pub enum Token {
     Int(u64),
     Ident(String),
     Let,
+    True,
+    False,
     Plus,
     Minus,
     Star,
@@ -23,6 +25,8 @@ impl fmt::Display for Token {
             Token::Int(n) => write!(f, "{n}"),
             Token::Ident(name) => write!(f, "{name}"),
             Token::Let => write!(f, "let"),
+            Token::True => write!(f, "true"),
+            Token::False => write!(f, "false"),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
@@ -111,6 +115,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
                 }
                 match name.as_str() {
                     "let" => Token::Let,
+                    "true" => Token::True,
+                    "false" => Token::False,
                     _ => Token::Ident(name),
                 }
             }
@@ -232,6 +238,14 @@ mod tests {
     }
 
     #[test]
+    fn bool_keywords() {
+        assert_eq!(
+            tokens("true false truth"),
+            Ok(vec![Token::True, Token::False, ident("truth"), Token::Eof])
+        );
+    }
+
+    #[test]
     fn keyword_prefix_is_identifier() {
         assert_eq!(tokens("letter"), Ok(vec![ident("letter"), Token::Eof]));
     }
@@ -277,7 +291,7 @@ mod tests {
 
     #[test]
     fn display_round_trip() {
-        let source = "let x = f ( 1 , y ) * 2 / 3 - 4 + 5 ;";
+        let source = "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 ;";
         let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens
             .iter()
