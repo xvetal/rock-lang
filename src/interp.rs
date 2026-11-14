@@ -123,6 +123,12 @@ impl<W: Write> Interpreter<W> {
                     Ok(Value::Unit)
                 }
             }
+            Expr::While { cond, body } => {
+                while boolean(self.eval(cond)?)? {
+                    self.block(body)?;
+                }
+                Ok(Value::Unit)
+            }
         }
     }
 
@@ -414,6 +420,28 @@ mod tests {
     }
 
     #[test]
+    fn while_loop() {
+        let program = "let i = 0; let sum = 0; while i < 10 { i = i + 1; sum = sum + i; } sum";
+        assert_eq!(run(program), Ok(55));
+    }
+
+    #[test]
+    fn while_false_does_not_run_body() {
+        assert_eq!(output("while false { print(1); }"), Ok(String::new()));
+    }
+
+    #[test]
+    fn while_is_unit() {
+        assert_eq!(value("while false {}"), Ok(Value::Unit));
+    }
+
+    #[test]
+    fn while_body_scope_is_fresh_each_iteration() {
+        let program = "let i = 0; while i < 3 { let x = i; i = i + 1; print(x); }";
+        assert_eq!(output(program), Ok("0\n1\n2\n".to_string()));
+    }
+
+    #[test]
     fn let_bindings() {
         assert_eq!(run("let x = 1 + 2; let y = x * 3; y - 1"), Ok(8));
     }
@@ -517,6 +545,22 @@ mod tests {
     #[test]
     fn assignment_to_undefined_variable() {
         assert_eq!(run("x = 1; 0"), Err("undefined variable: x".to_string()));
+    }
+
+    #[test]
+    fn while_condition_must_be_bool() {
+        assert_eq!(value("while 1 {}"), Err("expected bool, got 1".to_string()));
+    }
+
+    #[test]
+    fn error_stops_loop() {
+        let mut interp = Interpreter::new(Vec::new());
+        let program = "let i = 0; while true { i = i + 1; if i == 3 { 1 / 0 } else { 0 }; }";
+        assert_eq!(
+            exec(&mut interp, program),
+            Err("division by zero".to_string())
+        );
+        assert_eq!(exec(&mut interp, "i"), Ok(Value::Int(3)));
     }
 
     #[test]

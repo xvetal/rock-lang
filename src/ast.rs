@@ -53,6 +53,10 @@ pub enum Expr {
         then_branch: Block,
         else_branch: Option<Box<Expr>>,
     },
+    While {
+        cond: Box<Expr>,
+        body: Block,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

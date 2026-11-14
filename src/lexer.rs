@@ -9,6 +9,7 @@ pub enum Token {
     False,
     If,
     Else,
+    While,
     Plus,
     Minus,
     Star,
@@ -42,6 +43,7 @@ impl fmt::Display for Token {
             Token::False => write!(f, "false"),
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
+            Token::While => write!(f, "while"),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
@@ -156,6 +158,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
                     "false" => Token::False,
                     "if" => Token::If,
                     "else" => Token::Else,
+                    "while" => Token::While,
                     _ => Token::Ident(name),
                 }
             }
@@ -303,6 +306,11 @@ mod tests {
     }
 
     #[test]
+    fn while_keyword() {
+        assert_eq!(tokens("while"), Ok(vec![Token::While, Token::Eof]));
+    }
+
+    #[test]
     fn keyword_prefix_is_identifier() {
         assert_eq!(tokens("letter"), Ok(vec![ident("letter"), Token::Eof]));
     }
@@ -390,7 +398,7 @@ mod tests {
 
     #[test]
     fn display_round_trip() {
-        let source = "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; { } if x { } else { }";
+        let source = "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; { } if x { } else { } while x { }";
         let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens
             .iter()

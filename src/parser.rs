@@ -88,7 +88,7 @@ impl Parser {
                     if self.peek() == &Token::Semicolon {
                         self.advance();
                         stmts.push(Stmt::Expr(value));
-                    } else if matches!(value, Expr::Block(_) | Expr::If { .. })
+                    } else if matches!(value, Expr::Block(_) | Expr::If { .. } | Expr::While { .. })
                         && !matches!(self.peek(), Token::Eof | Token::RBrace)
                     {
                         stmts.push(Stmt::Expr(value));
@@ -264,6 +264,7 @@ impl Parser {
             }
             Token::LBrace => Ok(Expr::Block(self.block()?)),
             Token::If => self.if_expr(),
+            Token::While => self.while_expr(),
             Token::LParen => {
                 let inner = self.expr()?;
                 self.expect(Token::RParen, "')'")?;
@@ -303,6 +304,16 @@ impl Parser {
             cond: Box::new(cond),
             then_branch,
             else_branch,
+        })
+    }
+
+    fn while_expr(&mut self) -> Result<Expr, ParseError> {
+        let cond = self.expr()?;
+        self.expect(Token::LBrace, "'{'")?;
+        let body = self.block()?;
+        Ok(Expr::While {
+            cond: Box::new(cond),
+            body,
         })
     }
 
@@ -450,6 +461,16 @@ mod tests {
             cond: Box::new(cond),
             then_branch,
             else_branch: else_branch.map(Box::new),
+        }
+    }
+
+    fn while_expr(cond: Expr, body: Expr) -> Expr {
+        let Expr::Block(body) = body else {
+            panic!("loop body must be a block");
+        };
+        Expr::While {
+            cond: Box::new(cond),
+            body,
         }
     }
 
@@ -788,6 +809,28 @@ mod tests {
     }
 
     #[test]
+    fn while_loop() {
+        assert_eq!(
+            parse("while i < 3 { i }"),
+            Ok(while_expr(
+                bin(Lt, var("i"), int(3)),
+                block(vec![], Some(var("i")))
+            ))
+        );
+    }
+
+    #[test]
+    fn while_statement_without_semicolon() {
+        assert_eq!(
+            parse_program("while c {} 1"),
+            Ok(Program {
+                stmts: vec![Stmt::Expr(while_expr(var("c"), block(vec![], None)))],
+                expr: Some(int(1))
+            })
+        );
+    }
+
+    #[test]
     fn empty_program() {
         assert_eq!(
             parse_program(""),
@@ -1097,6 +1140,14 @@ mod tests {
         assert_eq!(
             parse_program("let y = x = 1;"),
             Err(at(expected("';'", Token::Eq), 1, 11))
+        );
+    }
+
+    #[test]
+    fn while_without_braces() {
+        assert_eq!(
+            parse("while true 1"),
+            Err(at(expected("'{'", Token::Int(1)), 1, 12))
         );
     }
 }
