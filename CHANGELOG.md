@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-14
+
 ### Added
 - `break;` and `continue;` inside `while` loops; outside a loop they are a parse error
 
