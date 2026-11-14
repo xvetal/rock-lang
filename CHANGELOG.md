@@ -8,6 +8,7 @@
 - Logical operators `!`, `&&`, `||`; `&&` and `||` short-circuit
 - Blocks `{ ... }`: a block is an expression whose value is its last expression; `let` inside a block is local to it
 - `if`/`else` expressions, including `else if` chains; `if` without `else` evaluates to `()`
+- Assignment `x = value;` updates an existing variable in the nearest enclosing scope
 
 ### Changed
 - Error messages show tokens as written: `unexpected ')'` instead of `unexpected token: RParen`

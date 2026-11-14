@@ -35,6 +35,10 @@ impl<W: Write> Interpreter<W> {
                     let value = self.eval(value)?;
                     self.define(name, value);
                 }
+                Stmt::Assign { name, value } => {
+                    let value = self.eval(value)?;
+                    self.assign(name, value)?;
+                }
                 Stmt::Expr(expr) => {
                     self.eval(expr)?;
                 }
@@ -51,6 +55,17 @@ impl<W: Write> Interpreter<W> {
             .last_mut()
             .expect("global scope is never popped")
             .insert(name.to_string(), value);
+    }
+
+    fn assign(&mut self, name: &str, value: Value) -> Result<(), String> {
+        let slot = self
+            .scopes
+            .iter_mut()
+            .rev()
+            .find_map(|scope| scope.get_mut(name))
+            .ok_or_else(|| format!("undefined variable: {name}"))?;
+        *slot = value;
+        Ok(())
     }
 
     fn lookup(&self, name: &str) -> Result<Value, String> {
@@ -384,6 +399,21 @@ mod tests {
     }
 
     #[test]
+    fn assignment() {
+        assert_eq!(run("let x = 1; x = x + 1; x"), Ok(2));
+    }
+
+    #[test]
+    fn assignment_in_block_changes_outer_variable() {
+        assert_eq!(run("let x = 1; { x = 2; } x"), Ok(2));
+    }
+
+    #[test]
+    fn assignment_changes_innermost_variable() {
+        assert_eq!(run("let x = 1; { let x = 2; x = 3; } x"), Ok(1));
+    }
+
+    #[test]
     fn let_bindings() {
         assert_eq!(run("let x = 1 + 2; let y = x * 3; y - 1"), Ok(8));
     }
@@ -482,6 +512,11 @@ mod tests {
             run("if 1 { 2 } else { 3 }"),
             Err("expected bool, got 1".to_string())
         );
+    }
+
+    #[test]
+    fn assignment_to_undefined_variable() {
+        assert_eq!(run("x = 1; 0"), Err("undefined variable: x".to_string()));
     }
 
     #[test]

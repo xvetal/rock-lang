@@ -79,6 +79,10 @@ impl Parser {
             match self.peek() {
                 Token::Eof | Token::RBrace => return Ok((stmts, None)),
                 Token::Let => stmts.push(self.let_stmt()?),
+                Token::Ident(name) if self.peek_next() == &Token::Eq => {
+                    let name = name.clone();
+                    stmts.push(self.assign_stmt(name)?);
+                }
                 _ => {
                     let value = self.expr()?;
                     if self.peek() == &Token::Semicolon {
@@ -113,6 +117,14 @@ impl Parser {
         let value = self.expr()?;
         self.expect(Token::Semicolon, "';'")?;
         Ok(Stmt::Let { name, value })
+    }
+
+    fn assign_stmt(&mut self, name: String) -> Result<Stmt, ParseError> {
+        self.advance();
+        self.advance();
+        let value = self.expr()?;
+        self.expect(Token::Semicolon, "';'")?;
+        Ok(Stmt::Assign { name, value })
     }
 
     fn expr(&mut self) -> Result<Expr, ParseError> {
@@ -319,6 +331,11 @@ impl Parser {
 
     fn peek(&self) -> &Token {
         &self.tokens[self.pos].token
+    }
+
+    fn peek_next(&self) -> &Token {
+        let next = (self.pos + 1).min(self.tokens.len() - 1);
+        &self.tokens[next].token
     }
 
     fn peek_pos(&self) -> Pos {
@@ -752,6 +769,25 @@ mod tests {
     }
 
     #[test]
+    fn assignment() {
+        assert_eq!(
+            parse_program("x = x + 1;"),
+            Ok(Program {
+                stmts: vec![Stmt::Assign {
+                    name: "x".to_string(),
+                    value: bin(Add, var("x"), int(1))
+                }],
+                expr: None
+            })
+        );
+    }
+
+    #[test]
+    fn equality_is_not_assignment() {
+        assert_eq!(parse("x == 1"), Ok(bin(Eq, var("x"), int(1))));
+    }
+
+    #[test]
     fn empty_program() {
         assert_eq!(
             parse_program(""),
@@ -1037,6 +1073,30 @@ mod tests {
         assert_eq!(
             parse("if { 1 }"),
             Err(at(expected("'{'", Token::Eof), 1, 9))
+        );
+    }
+
+    #[test]
+    fn assignment_without_semicolon() {
+        assert_eq!(
+            parse_program("x = 1"),
+            Err(at(expected("';'", Token::Eof), 1, 6))
+        );
+    }
+
+    #[test]
+    fn assignment_to_non_variable() {
+        assert_eq!(
+            parse_program("1 = 2;"),
+            Err(at(ParseErrorKind::Unexpected(Token::Eq), 1, 3))
+        );
+    }
+
+    #[test]
+    fn assignment_is_not_an_expression() {
+        assert_eq!(
+            parse_program("let y = x = 1;"),
+            Err(at(expected("';'", Token::Eq), 1, 11))
         );
     }
 }

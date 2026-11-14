@@ -64,6 +64,7 @@ pub struct Block {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Let { name: String, value: Expr },
+    Assign { name: String, value: Expr },
     Expr(Expr),
 }
 
