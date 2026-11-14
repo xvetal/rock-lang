@@ -4,7 +4,7 @@ A toy programming language written in Rust, built for learning.
 
 ## Status
 
-Version 0.4.0: booleans, blocks, `if`/`else`, assignment, and `while` loops.
+Version 0.5.0: user-defined functions with `fn` and `return`.
 
 - Integer and boolean literals, `+ - * /`, unary minus, parentheses
 - Comparisons `== != < <= > >=` and logical `! && ||` with short-circuit
@@ -12,8 +12,9 @@ Version 0.4.0: booleans, blocks, `if`/`else`, assignment, and `while` loops.
 - Variables with `let`, including shadowing, and assignment `x = value;`
 - Blocks with lexical scope; `if`/`else` and blocks are expressions
 - `while` loops
-- Function calls and the built-in `print`
-- Errors with line and column for parse errors; division by zero, integer overflow, undefined names, and type errors at runtime
+- Functions with `fn` and `return`, including recursion; functions are values
+- The built-in `print`
+- Errors with line and column for parse errors; division by zero, integer overflow, undefined names, type errors, and stack overflow at runtime
 - Interactive REPL and running programs from a file
 
 ## Goals
