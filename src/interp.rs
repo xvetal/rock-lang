@@ -1,8 +1,49 @@
 use std::collections::HashMap;
-use std::io::Write;
+use std::fmt;
+use std::io::{self, Write};
 
 use crate::ast::{BinaryOp, Block, Expr, LogicalOp, Program, Stmt, UnaryOp};
 use crate::value::Value;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuntimeError {
+    UndefinedVariable(String),
+    UndefinedFunction(String),
+    ArgumentCount {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
+    TypeMismatch {
+        expected: &'static str,
+        found: Value,
+    },
+    CannotCompare(Value, Value),
+    DivisionByZero,
+    IntegerOverflow,
+    Output(io::ErrorKind),
+}
+
+impl fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RuntimeError::UndefinedVariable(name) => write!(f, "undefined variable: {name}"),
+            RuntimeError::UndefinedFunction(name) => write!(f, "undefined function: {name}"),
+            RuntimeError::ArgumentCount {
+                name,
+                expected,
+                found,
+            } => write!(f, "{name} expects {expected} argument, got {found}"),
+            RuntimeError::TypeMismatch { expected, found } => {
+                write!(f, "expected {expected}, got {found}")
+            }
+            RuntimeError::CannotCompare(l, r) => write!(f, "cannot compare {l} with {r}"),
+            RuntimeError::DivisionByZero => write!(f, "division by zero"),
+            RuntimeError::IntegerOverflow => write!(f, "integer overflow"),
+            RuntimeError::Output(kind) => write!(f, "cannot write output: {kind}"),
+        }
+    }
+}
 
 pub struct Interpreter<W: Write> {
     scopes: Vec<HashMap<String, Value>>,
@@ -17,18 +58,18 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    pub fn run(&mut self, program: &Program) -> Result<Value, String> {
+    pub fn run(&mut self, program: &Program) -> Result<Value, RuntimeError> {
         self.sequence(&program.stmts, program.expr.as_ref())
     }
 
-    fn block(&mut self, block: &Block) -> Result<Value, String> {
+    fn block(&mut self, block: &Block) -> Result<Value, RuntimeError> {
         self.scopes.push(HashMap::new());
         let result = self.sequence(&block.stmts, block.expr.as_deref());
         self.scopes.pop();
         result
     }
 
-    fn sequence(&mut self, stmts: &[Stmt], expr: Option<&Expr>) -> Result<Value, String> {
+    fn sequence(&mut self, stmts: &[Stmt], expr: Option<&Expr>) -> Result<Value, RuntimeError> {
         for stmt in stmts {
             match stmt {
                 Stmt::Let { name, value } => {
@@ -57,27 +98,27 @@ impl<W: Write> Interpreter<W> {
             .insert(name.to_string(), value);
     }
 
-    fn assign(&mut self, name: &str, value: Value) -> Result<(), String> {
+    fn assign(&mut self, name: &str, value: Value) -> Result<(), RuntimeError> {
         let slot = self
             .scopes
             .iter_mut()
             .rev()
             .find_map(|scope| scope.get_mut(name))
-            .ok_or_else(|| format!("undefined variable: {name}"))?;
+            .ok_or_else(|| RuntimeError::UndefinedVariable(name.to_string()))?;
         *slot = value;
         Ok(())
     }
 
-    fn lookup(&self, name: &str) -> Result<Value, String> {
+    fn lookup(&self, name: &str) -> Result<Value, RuntimeError> {
         self.scopes
             .iter()
             .rev()
             .find_map(|scope| scope.get(name))
             .copied()
-            .ok_or_else(|| format!("undefined variable: {name}"))
+            .ok_or_else(|| RuntimeError::UndefinedVariable(name.to_string()))
     }
 
-    fn eval(&mut self, expr: &Expr) -> Result<Value, String> {
+    fn eval(&mut self, expr: &Expr) -> Result<Value, RuntimeError> {
         match expr {
             Expr::Int(n) => Ok(Value::Int(*n)),
             Expr::Bool(b) => Ok(Value::Bool(*b)),
@@ -132,21 +173,25 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    fn call(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+    fn call(&mut self, name: &str, args: &[Value]) -> Result<Value, RuntimeError> {
         match name {
             "print" => {
                 let [value] = args else {
-                    return Err(format!("print expects 1 argument, got {}", args.len()));
+                    return Err(RuntimeError::ArgumentCount {
+                        name: name.to_string(),
+                        expected: 1,
+                        found: args.len(),
+                    });
                 };
-                writeln!(self.out, "{value}").map_err(|e| format!("cannot write output: {e}"))?;
+                writeln!(self.out, "{value}").map_err(|e| RuntimeError::Output(e.kind()))?;
                 Ok(Value::Unit)
             }
-            _ => Err(format!("undefined function: {name}")),
+            _ => Err(RuntimeError::UndefinedFunction(name.to_string())),
         }
     }
 }
 
-fn binary(op: &BinaryOp, l: Value, r: Value) -> Result<Value, String> {
+fn binary(op: &BinaryOp, l: Value, r: Value) -> Result<Value, RuntimeError> {
     match op {
         BinaryOp::Eq => Ok(Value::Bool(equal(l, r)?)),
         BinaryOp::Ne => Ok(Value::Bool(!equal(l, r)?)),
@@ -160,38 +205,44 @@ fn binary(op: &BinaryOp, l: Value, r: Value) -> Result<Value, String> {
         BinaryOp::Div => {
             let (l, r) = (int(l)?, int(r)?);
             if r == 0 {
-                return Err("division by zero".to_string());
+                return Err(RuntimeError::DivisionByZero);
             }
             checked(l.checked_div(r))
         }
     }
 }
 
-fn equal(l: Value, r: Value) -> Result<bool, String> {
+fn equal(l: Value, r: Value) -> Result<bool, RuntimeError> {
     match (l, r) {
         (Value::Int(a), Value::Int(b)) => Ok(a == b),
         (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
         (Value::Unit, Value::Unit) => Ok(true),
-        (l, r) => Err(format!("cannot compare {l} with {r}")),
+        (l, r) => Err(RuntimeError::CannotCompare(l, r)),
     }
 }
 
-fn int(value: Value) -> Result<i64, String> {
+fn int(value: Value) -> Result<i64, RuntimeError> {
     match value {
         Value::Int(n) => Ok(n),
-        other => Err(format!("expected integer, got {other}")),
+        found => Err(RuntimeError::TypeMismatch {
+            expected: "integer",
+            found,
+        }),
     }
 }
 
-fn boolean(value: Value) -> Result<bool, String> {
+fn boolean(value: Value) -> Result<bool, RuntimeError> {
     match value {
         Value::Bool(b) => Ok(b),
-        other => Err(format!("expected bool, got {other}")),
+        found => Err(RuntimeError::TypeMismatch {
+            expected: "bool",
+            found,
+        }),
     }
 }
 
-fn checked(result: Option<i64>) -> Result<Value, String> {
-    result.map(Value::Int).ok_or("integer overflow".to_string())
+fn checked(result: Option<i64>) -> Result<Value, RuntimeError> {
+    result.map(Value::Int).ok_or(RuntimeError::IntegerOverflow)
 }
 
 #[cfg(test)]
@@ -200,26 +251,34 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::Parser;
 
-    fn exec(interp: &mut Interpreter<Vec<u8>>, input: &str) -> Result<Value, String> {
+    fn exec(interp: &mut Interpreter<Vec<u8>>, input: &str) -> Result<Value, RuntimeError> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
         interp.run(&program)
     }
 
-    fn value(input: &str) -> Result<Value, String> {
+    fn value(input: &str) -> Result<Value, RuntimeError> {
         exec(&mut Interpreter::new(Vec::new()), input)
     }
 
-    fn run(input: &str) -> Result<i64, String> {
+    fn run(input: &str) -> Result<i64, RuntimeError> {
         match exec(&mut Interpreter::new(Vec::new()), input)? {
             Value::Int(n) => Ok(n),
             other => panic!("expected integer, got {other}"),
         }
     }
 
-    fn output(input: &str) -> Result<String, String> {
+    fn output(input: &str) -> Result<String, RuntimeError> {
         let mut interp = Interpreter::new(Vec::new());
         exec(&mut interp, input)?;
         Ok(String::from_utf8(interp.out).unwrap())
+    }
+
+    fn mismatch(expected: &'static str, found: Value) -> RuntimeError {
+        RuntimeError::TypeMismatch { expected, found }
+    }
+
+    fn undefined(name: &str) -> RuntimeError {
+        RuntimeError::UndefinedVariable(name.to_string())
     }
 
     #[test]
@@ -497,30 +556,24 @@ mod tests {
         let mut interp = Interpreter::new(Vec::new());
         assert_eq!(
             exec(&mut interp, "print(1); print(1 / 0);"),
-            Err("division by zero".to_string())
+            Err(RuntimeError::DivisionByZero)
         );
         assert_eq!(String::from_utf8(interp.out).unwrap(), "1\n");
     }
 
     #[test]
     fn undefined_variable() {
-        assert_eq!(run("x + 1"), Err("undefined variable: x".to_string()));
+        assert_eq!(run("x + 1"), Err(undefined("x")));
     }
 
     #[test]
     fn use_before_definition() {
-        assert_eq!(
-            run("let y = x; let x = 1; y"),
-            Err("undefined variable: x".to_string())
-        );
+        assert_eq!(run("let y = x; let x = 1; y"), Err(undefined("x")));
     }
 
     #[test]
     fn block_variable_not_visible_outside() {
-        assert_eq!(
-            run("{ let y = 1; } y"),
-            Err("undefined variable: y".to_string())
-        );
+        assert_eq!(run("{ let y = 1; } y"), Err(undefined("y")));
     }
 
     #[test]
@@ -529,7 +582,7 @@ mod tests {
         assert_eq!(exec(&mut interp, "let x = 1;"), Ok(Value::Unit));
         assert_eq!(
             exec(&mut interp, "{ let x = 2; 1 / 0 }"),
-            Err("division by zero".to_string())
+            Err(RuntimeError::DivisionByZero)
         );
         assert_eq!(exec(&mut interp, "x"), Ok(Value::Int(1)));
     }
@@ -538,18 +591,18 @@ mod tests {
     fn if_condition_must_be_bool() {
         assert_eq!(
             run("if 1 { 2 } else { 3 }"),
-            Err("expected bool, got 1".to_string())
+            Err(mismatch("bool", Value::Int(1)))
         );
     }
 
     #[test]
     fn assignment_to_undefined_variable() {
-        assert_eq!(run("x = 1; 0"), Err("undefined variable: x".to_string()));
+        assert_eq!(run("x = 1; 0"), Err(undefined("x")));
     }
 
     #[test]
     fn while_condition_must_be_bool() {
-        assert_eq!(value("while 1 {}"), Err("expected bool, got 1".to_string()));
+        assert_eq!(value("while 1 {}"), Err(mismatch("bool", Value::Int(1))));
     }
 
     #[test]
@@ -558,58 +611,59 @@ mod tests {
         let program = "let i = 0; while true { i = i + 1; if i == 3 { 1 / 0 } else { 0 }; }";
         assert_eq!(
             exec(&mut interp, program),
-            Err("division by zero".to_string())
+            Err(RuntimeError::DivisionByZero)
         );
         assert_eq!(exec(&mut interp, "i"), Ok(Value::Int(3)));
     }
 
     #[test]
     fn expression_statement_error() {
-        assert_eq!(run("1 / 0; 2"), Err("division by zero".to_string()));
+        assert_eq!(run("1 / 0; 2"), Err(RuntimeError::DivisionByZero));
     }
 
     #[test]
     fn undefined_function() {
-        assert_eq!(run("foo(1)"), Err("undefined function: foo".to_string()));
+        assert_eq!(
+            run("foo(1)"),
+            Err(RuntimeError::UndefinedFunction("foo".to_string()))
+        );
     }
 
     #[test]
     fn print_wrong_argument_count() {
         assert_eq!(
             run("print(1, 2)"),
-            Err("print expects 1 argument, got 2".to_string())
+            Err(RuntimeError::ArgumentCount {
+                name: "print".to_string(),
+                expected: 1,
+                found: 2
+            })
         );
     }
 
     #[test]
     fn unit_in_arithmetic() {
-        assert_eq!(
-            run("print(1) + 1"),
-            Err("expected integer, got ()".to_string())
-        );
+        assert_eq!(run("print(1) + 1"), Err(mismatch("integer", Value::Unit)));
     }
 
     #[test]
     fn bool_in_arithmetic() {
-        assert_eq!(
-            run("true + 1"),
-            Err("expected integer, got true".to_string())
-        );
+        assert_eq!(run("true + 1"), Err(mismatch("integer", Value::Bool(true))));
     }
 
     #[test]
     fn negation_of_bool() {
-        assert_eq!(
-            run("-false"),
-            Err("expected integer, got false".to_string())
-        );
+        assert_eq!(run("-false"), Err(mismatch("integer", Value::Bool(false))));
     }
 
     #[test]
     fn compare_int_with_bool() {
         assert_eq!(
             value("1 == true"),
-            Err("cannot compare 1 with true".to_string())
+            Err(RuntimeError::CannotCompare(
+                Value::Int(1),
+                Value::Bool(true)
+            ))
         );
     }
 
@@ -617,43 +671,43 @@ mod tests {
     fn ordering_of_bools() {
         assert_eq!(
             value("false < true"),
-            Err("expected integer, got false".to_string())
+            Err(mismatch("integer", Value::Bool(false)))
         );
     }
 
     #[test]
     fn not_of_int() {
-        assert_eq!(value("!1"), Err("expected bool, got 1".to_string()));
+        assert_eq!(value("!1"), Err(mismatch("bool", Value::Int(1))));
     }
 
     #[test]
     fn and_with_int() {
-        assert_eq!(value("1 && true"), Err("expected bool, got 1".to_string()));
+        assert_eq!(value("1 && true"), Err(mismatch("bool", Value::Int(1))));
     }
 
     #[test]
     fn evaluated_right_operand_must_be_bool() {
         assert_eq!(
             value("true && print(1)"),
-            Err("expected bool, got ()".to_string())
+            Err(mismatch("bool", Value::Unit))
         );
     }
 
     #[test]
     fn division_by_zero() {
-        assert_eq!(run("1 / 0"), Err("division by zero".to_string()));
+        assert_eq!(run("1 / 0"), Err(RuntimeError::DivisionByZero));
     }
 
     #[test]
     fn computed_division_by_zero() {
-        assert_eq!(run("1 / (2 - 2)"), Err("division by zero".to_string()));
+        assert_eq!(run("1 / (2 - 2)"), Err(RuntimeError::DivisionByZero));
     }
 
     #[test]
     fn addition_overflow() {
         assert_eq!(
             run("9223372036854775807 + 1"),
-            Err("integer overflow".to_string())
+            Err(RuntimeError::IntegerOverflow)
         );
     }
 
@@ -661,7 +715,7 @@ mod tests {
     fn subtraction_overflow() {
         assert_eq!(
             run("0 - 9223372036854775807 - 2"),
-            Err("integer overflow".to_string())
+            Err(RuntimeError::IntegerOverflow)
         );
     }
 
@@ -669,7 +723,7 @@ mod tests {
     fn multiplication_overflow() {
         assert_eq!(
             run("9223372036854775807 * 2"),
-            Err("integer overflow".to_string())
+            Err(RuntimeError::IntegerOverflow)
         );
     }
 
@@ -677,7 +731,7 @@ mod tests {
     fn negation_overflow() {
         assert_eq!(
             run("-(-9223372036854775807 - 1)"),
-            Err("integer overflow".to_string())
+            Err(RuntimeError::IntegerOverflow)
         );
     }
 
@@ -685,7 +739,7 @@ mod tests {
     fn negation_of_min_value_overflows() {
         assert_eq!(
             run("--9223372036854775808"),
-            Err("integer overflow".to_string())
+            Err(RuntimeError::IntegerOverflow)
         );
     }
 
@@ -693,7 +747,42 @@ mod tests {
     fn min_value_divided_by_minus_one() {
         assert_eq!(
             run("-9223372036854775808 / -1"),
-            Err("integer overflow".to_string())
+            Err(RuntimeError::IntegerOverflow)
+        );
+    }
+
+    #[test]
+    fn error_messages() {
+        assert_eq!(undefined("x").to_string(), "undefined variable: x");
+        assert_eq!(
+            RuntimeError::UndefinedFunction("foo".to_string()).to_string(),
+            "undefined function: foo"
+        );
+        assert_eq!(
+            RuntimeError::ArgumentCount {
+                name: "print".to_string(),
+                expected: 1,
+                found: 2
+            }
+            .to_string(),
+            "print expects 1 argument, got 2"
+        );
+        assert_eq!(
+            mismatch("bool", Value::Unit).to_string(),
+            "expected bool, got ()"
+        );
+        assert_eq!(
+            RuntimeError::CannotCompare(Value::Int(1), Value::Bool(true)).to_string(),
+            "cannot compare 1 with true"
+        );
+        assert_eq!(RuntimeError::DivisionByZero.to_string(), "division by zero");
+        assert_eq!(
+            RuntimeError::IntegerOverflow.to_string(),
+            "integer overflow"
+        );
+        assert_eq!(
+            RuntimeError::Output(io::ErrorKind::BrokenPipe).to_string(),
+            "cannot write output: broken pipe"
         );
     }
 }

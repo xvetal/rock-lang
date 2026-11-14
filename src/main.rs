@@ -77,5 +77,5 @@ fn run(interp: &mut Interpreter<io::Stdout>, source: &str) -> Result<Value, Stri
     let program = parser::Parser::new(tokens)
         .parse()
         .map_err(|e| e.to_string())?;
-    interp.run(&program)
+    interp.run(&program).map_err(|e| e.to_string())
 }
