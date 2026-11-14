@@ -1,7 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use crate::ast::{BinaryOp, Block, Expr, FnDecl, LogicalOp, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Block, Expr, ExprKind, FnDecl, LogicalOp, Program, Stmt, UnaryOp};
 use crate::lexer::{Located, Pos, Token};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,8 +102,10 @@ impl Parser {
                     if self.peek() == &Token::Semicolon {
                         self.advance();
                         stmts.push(Stmt::Expr(value));
-                    } else if matches!(value, Expr::Block(_) | Expr::If { .. } | Expr::While { .. })
-                        && !matches!(self.peek(), Token::Eof | Token::RBrace)
+                    } else if matches!(
+                        value.kind,
+                        ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::While { .. }
+                    ) && !matches!(self.peek(), Token::Eof | Token::RBrace)
                     {
                         stmts.push(Stmt::Expr(value));
                     } else {
@@ -150,13 +152,15 @@ impl Parser {
     fn or(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.and()?;
         while self.peek() == &Token::OrOr {
+            let pos = self.peek_pos();
             self.advance();
             let right = self.and()?;
-            left = Expr::Logical {
+            left = ExprKind::Logical {
                 op: LogicalOp::Or,
                 left: Box::new(left),
                 right: Box::new(right),
-            };
+            }
+            .at(pos);
         }
         Ok(left)
     }
@@ -164,13 +168,15 @@ impl Parser {
     fn and(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.comparison()?;
         while self.peek() == &Token::AndAnd {
+            let pos = self.peek_pos();
             self.advance();
             let right = self.comparison()?;
-            left = Expr::Logical {
+            left = ExprKind::Logical {
                 op: LogicalOp::And,
                 left: Box::new(left),
                 right: Box::new(right),
-            };
+            }
+            .at(pos);
         }
         Ok(left)
     }
@@ -186,13 +192,15 @@ impl Parser {
             Token::GtEq => BinaryOp::Ge,
             _ => return Ok(left),
         };
+        let pos = self.peek_pos();
         self.advance();
         let right = self.additive()?;
-        Ok(Expr::Binary {
+        Ok(ExprKind::Binary {
             op,
             left: Box::new(left),
             right: Box::new(right),
-        })
+        }
+        .at(pos))
     }
 
     fn additive(&mut self) -> Result<Expr, ParseError> {
@@ -203,13 +211,15 @@ impl Parser {
                 Token::Minus => BinaryOp::Sub,
                 _ => break,
             };
+            let pos = self.peek_pos();
             self.advance();
             let right = self.term()?;
-            left = Expr::Binary {
+            left = ExprKind::Binary {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
-            };
+            }
+            .at(pos);
         }
         Ok(left)
     }
@@ -222,25 +232,29 @@ impl Parser {
                 Token::Slash => BinaryOp::Div,
                 _ => break,
             };
+            let pos = self.peek_pos();
             self.advance();
             let right = self.unary()?;
-            left = Expr::Binary {
+            left = ExprKind::Binary {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
-            };
+            }
+            .at(pos);
         }
         Ok(left)
     }
 
     fn unary(&mut self) -> Result<Expr, ParseError> {
+        let pos = self.peek_pos();
         if self.peek() == &Token::Bang {
             self.advance();
             let operand = self.unary()?;
-            return Ok(Expr::Unary {
+            return Ok(ExprKind::Unary {
                 op: UnaryOp::Not,
                 operand: Box::new(operand),
-            });
+            }
+            .at(pos));
         }
         if self.peek() == &Token::Minus {
             self.advance();
@@ -248,13 +262,14 @@ impl Parser {
                 && n == i64::MIN.unsigned_abs()
             {
                 self.advance();
-                return Ok(Expr::Int(i64::MIN));
+                return Ok(ExprKind::Int(i64::MIN).at(pos));
             }
             let operand = self.unary()?;
-            return Ok(Expr::Unary {
+            return Ok(ExprKind::Unary {
                 op: UnaryOp::Neg,
                 operand: Box::new(operand),
-            });
+            }
+            .at(pos));
         }
         self.primary()
     }
@@ -265,23 +280,23 @@ impl Parser {
             Token::Int(n) => {
                 let value =
                     i64::try_from(n).map_err(|_| ParseErrorKind::IntegerTooLarge.at(pos))?;
-                Ok(Expr::Int(value))
+                Ok(ExprKind::Int(value).at(pos))
             }
-            Token::True => Ok(Expr::Bool(true)),
-            Token::False => Ok(Expr::Bool(false)),
+            Token::True => Ok(ExprKind::Bool(true).at(pos)),
+            Token::False => Ok(ExprKind::Bool(false).at(pos)),
             Token::Ident(name) => {
                 if self.peek() == &Token::LParen {
                     self.advance();
                     let args = self.list(Self::expr)?;
-                    Ok(Expr::Call { name, args })
+                    Ok(ExprKind::Call { name, args }.at(pos))
                 } else {
-                    Ok(Expr::Var(name))
+                    Ok(ExprKind::Var(name).at(pos))
                 }
             }
-            Token::LBrace => Ok(Expr::Block(self.block()?)),
-            Token::If => self.if_expr(),
-            Token::While => self.while_expr(),
-            Token::Return if self.in_fn => self.return_expr(),
+            Token::LBrace => Ok(ExprKind::Block(self.block()?).at(pos)),
+            Token::If => self.if_expr(pos),
+            Token::While => self.while_expr(pos),
+            Token::Return if self.in_fn => self.return_expr(pos),
             Token::Return => Err(ParseErrorKind::ReturnOutsideFn.at(pos)),
             Token::LParen => {
                 let inner = self.expr()?;
@@ -296,7 +311,7 @@ impl Parser {
         }
     }
 
-    fn if_expr(&mut self) -> Result<Expr, ParseError> {
+    fn if_expr(&mut self, pos: Pos) -> Result<Expr, ParseError> {
         let cond = self.expr()?;
         self.expect(Token::LBrace, "'{'")?;
         let then_branch = self.block()?;
@@ -304,8 +319,8 @@ impl Parser {
             self.advance();
             let pos = self.peek_pos();
             let branch = match self.advance() {
-                Token::LBrace => Expr::Block(self.block()?),
-                Token::If => self.if_expr()?,
+                Token::LBrace => ExprKind::Block(self.block()?).at(pos),
+                Token::If => self.if_expr(pos)?,
                 other => {
                     return Err(ParseErrorKind::Expected {
                         what: "'{' or 'if' after 'else'",
@@ -318,29 +333,31 @@ impl Parser {
         } else {
             None
         };
-        Ok(Expr::If {
+        Ok(ExprKind::If {
             cond: Box::new(cond),
             then_branch,
             else_branch,
-        })
+        }
+        .at(pos))
     }
 
-    fn while_expr(&mut self) -> Result<Expr, ParseError> {
+    fn while_expr(&mut self, pos: Pos) -> Result<Expr, ParseError> {
         let cond = self.expr()?;
         self.expect(Token::LBrace, "'{'")?;
         let body = self.block()?;
-        Ok(Expr::While {
+        Ok(ExprKind::While {
             cond: Box::new(cond),
             body,
-        })
+        }
+        .at(pos))
     }
 
-    fn return_expr(&mut self) -> Result<Expr, ParseError> {
+    fn return_expr(&mut self, pos: Pos) -> Result<Expr, ParseError> {
         let value = match self.peek() {
             Token::Semicolon | Token::RBrace | Token::Eof => None,
             _ => Some(Box::new(self.expr()?)),
         };
-        Ok(Expr::Return(value))
+        Ok(ExprKind::Return(value).at(pos))
     }
 
     fn list<T>(
@@ -414,8 +431,62 @@ mod tests {
     use BinaryOp::{Add, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Sub};
     use LogicalOp::{And, Or};
 
+    const NO_POS: Pos = Pos { line: 0, col: 0 };
+
     fn parse_program(input: &str) -> Result<Program, ParseError> {
-        Parser::new(tokenize(input).unwrap()).parse()
+        let mut program = Parser::new(tokenize(input).unwrap()).parse()?;
+        program.stmts.iter_mut().for_each(strip_stmt);
+        program.expr.iter_mut().for_each(strip);
+        Ok(program)
+    }
+
+    fn parse_located(input: &str) -> Expr {
+        let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
+        program.expr.expect("program should end with an expression")
+    }
+
+    fn strip(expr: &mut Expr) {
+        expr.pos = NO_POS;
+        match &mut expr.kind {
+            ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Var(_) | ExprKind::Return(None) => {}
+            ExprKind::Call { args, .. } => args.iter_mut().for_each(strip),
+            ExprKind::Binary { left, right, .. } | ExprKind::Logical { left, right, .. } => {
+                strip(left);
+                strip(right);
+            }
+            ExprKind::Unary { operand, .. } | ExprKind::Return(Some(operand)) => strip(operand),
+            ExprKind::Block(block) => strip_block(block),
+            ExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                strip(cond);
+                strip_block(then_branch);
+                else_branch.iter_mut().for_each(|e| strip(e));
+            }
+            ExprKind::While { cond, body } => {
+                strip(cond);
+                strip_block(body);
+            }
+        }
+    }
+
+    fn strip_block(block: &mut Block) {
+        block.stmts.iter_mut().for_each(strip_stmt);
+        block.expr.iter_mut().for_each(|e| strip(e));
+    }
+
+    fn strip_stmt(stmt: &mut Stmt) {
+        match stmt {
+            Stmt::Let { value, .. } | Stmt::Assign { value, .. } | Stmt::Expr(value) => {
+                strip(value)
+            }
+            Stmt::Fn(decl) => {
+                let decl = Rc::get_mut(decl).expect("a freshly parsed declaration is not shared");
+                strip_block(&mut decl.body);
+            }
+        }
     }
 
     fn parse(input: &str) -> Result<Expr, ParseError> {
@@ -432,11 +503,15 @@ mod tests {
     }
 
     fn int(n: i64) -> Expr {
-        Expr::Int(n)
+        ExprKind::Int(n).at(NO_POS)
     }
 
     fn var(name: &str) -> Expr {
-        Expr::Var(name.to_string())
+        ExprKind::Var(name.to_string()).at(NO_POS)
+    }
+
+    fn boolean(b: bool) -> Expr {
+        ExprKind::Bool(b).at(NO_POS)
     }
 
     fn let_stmt(name: &str, value: Expr) -> Stmt {
@@ -447,62 +522,69 @@ mod tests {
     }
 
     fn call(name: &str, args: Vec<Expr>) -> Expr {
-        Expr::Call {
+        ExprKind::Call {
             name: name.to_string(),
             args,
         }
+        .at(NO_POS)
     }
 
     fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-        Expr::Binary {
+        ExprKind::Binary {
             op,
             left: Box::new(left),
             right: Box::new(right),
         }
+        .at(NO_POS)
     }
 
     fn neg(operand: Expr) -> Expr {
-        Expr::Unary {
+        ExprKind::Unary {
             op: UnaryOp::Neg,
             operand: Box::new(operand),
         }
+        .at(NO_POS)
     }
 
     fn not(operand: Expr) -> Expr {
-        Expr::Unary {
+        ExprKind::Unary {
             op: UnaryOp::Not,
             operand: Box::new(operand),
         }
+        .at(NO_POS)
     }
 
     fn logical(op: LogicalOp, left: Expr, right: Expr) -> Expr {
-        Expr::Logical {
+        ExprKind::Logical {
             op,
             left: Box::new(left),
             right: Box::new(right),
         }
+        .at(NO_POS)
     }
 
     fn block(stmts: Vec<Stmt>, expr: Option<Expr>) -> Expr {
-        Expr::Block(Block {
+        ExprKind::Block(Block {
             stmts,
             expr: expr.map(Box::new),
         })
+        .at(NO_POS)
     }
 
     fn if_expr(cond: Expr, then_branch: Expr, else_branch: Option<Expr>) -> Expr {
-        let Expr::Block(then_branch) = then_branch else {
+        let ExprKind::Block(then_branch) = then_branch.kind else {
             panic!("then branch must be a block");
         };
-        Expr::If {
+        ExprKind::If {
             cond: Box::new(cond),
             then_branch,
             else_branch: else_branch.map(Box::new),
         }
+        .at(NO_POS)
     }
 
     fn fn_decl(name: &str, params: &[&str], body: Expr) -> Stmt {
-        let Expr::Block(body) = body else {
+        let ExprKind::Block(body) = body.kind else {
             panic!("function body must be a block");
         };
         Stmt::Fn(Rc::new(FnDecl {
@@ -513,17 +595,18 @@ mod tests {
     }
 
     fn while_expr(cond: Expr, body: Expr) -> Expr {
-        let Expr::Block(body) = body else {
+        let ExprKind::Block(body) = body.kind else {
             panic!("loop body must be a block");
         };
-        Expr::While {
+        ExprKind::While {
             cond: Box::new(cond),
             body,
         }
+        .at(NO_POS)
     }
 
     fn ret(value: Option<Expr>) -> Expr {
-        Expr::Return(value.map(Box::new))
+        ExprKind::Return(value.map(Box::new)).at(NO_POS)
     }
 
     #[test]
@@ -617,8 +700,8 @@ mod tests {
 
     #[test]
     fn bool_literals() {
-        assert_eq!(parse("true"), Ok(Expr::Bool(true)));
-        assert_eq!(parse("false"), Ok(Expr::Bool(false)));
+        assert_eq!(parse("true"), Ok(boolean(true)));
+        assert_eq!(parse("false"), Ok(boolean(false)));
     }
 
     #[test]
@@ -643,13 +726,13 @@ mod tests {
     fn parenthesized_comparison() {
         assert_eq!(
             parse("(1 < 2) == true"),
-            Ok(bin(Eq, bin(Lt, int(1), int(2)), Expr::Bool(true)))
+            Ok(bin(Eq, bin(Lt, int(1), int(2)), boolean(true)))
         );
     }
 
     #[test]
     fn logical_not() {
-        assert_eq!(parse("!true"), Ok(not(Expr::Bool(true))));
+        assert_eq!(parse("!true"), Ok(not(boolean(true))));
         assert_eq!(parse("!!x"), Ok(not(not(var("x")))));
     }
 
@@ -947,6 +1030,45 @@ mod tests {
                 expr: None
             })
         );
+    }
+
+    #[test]
+    fn infix_expressions_are_located_at_their_operator() {
+        let expr = parse_located("a * (b +\n  c)");
+        assert_eq!(expr.pos, Pos { line: 1, col: 3 });
+        let ExprKind::Binary { left, right, .. } = expr.kind else {
+            panic!("expected a binary expression");
+        };
+        assert_eq!(left.pos, Pos { line: 1, col: 1 });
+        assert_eq!(right.pos, Pos { line: 1, col: 8 });
+        let ExprKind::Binary { right, .. } = right.kind else {
+            panic!("expected a binary expression");
+        };
+        assert_eq!(right.pos, Pos { line: 2, col: 3 });
+    }
+
+    #[test]
+    fn other_expressions_are_located_at_their_first_token() {
+        let expr = parse_located("if x {\n  -f(y)\n} else {}");
+        assert_eq!(expr.pos, Pos { line: 1, col: 1 });
+        let ExprKind::If {
+            cond,
+            then_branch,
+            else_branch: Some(else_branch),
+        } = expr.kind
+        else {
+            panic!("expected an if expression with else");
+        };
+        assert_eq!(cond.pos, Pos { line: 1, col: 4 });
+        assert_eq!(else_branch.pos, Pos { line: 3, col: 8 });
+        let neg = then_branch
+            .expr
+            .expect("then branch should end with an expression");
+        assert_eq!(neg.pos, Pos { line: 2, col: 3 });
+        let ExprKind::Unary { operand: call, .. } = neg.kind else {
+            panic!("expected a unary expression");
+        };
+        assert_eq!(call.pos, Pos { line: 2, col: 4 });
     }
 
     #[test]

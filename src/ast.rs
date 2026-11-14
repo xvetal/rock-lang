@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use crate::lexer::Pos;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOp {
     Add,
@@ -27,7 +29,13 @@ pub enum LogicalOp {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub struct Expr {
+    pub kind: ExprKind,
+    pub pos: Pos,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind {
     Int(i64),
     Bool(bool),
     Var(String),
@@ -60,6 +68,12 @@ pub enum Expr {
         body: Block,
     },
     Return(Option<Box<Expr>>),
+}
+
+impl ExprKind {
+    pub fn at(self, pos: Pos) -> Expr {
+        Expr { kind: self, pos }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

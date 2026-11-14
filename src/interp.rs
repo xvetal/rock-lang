@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, Write};
 
-use crate::ast::{BinaryOp, Block, Expr, FnDecl, LogicalOp, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Block, Expr, ExprKind, FnDecl, LogicalOp, Program, Stmt, UnaryOp};
 use crate::value::Value;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -148,30 +148,30 @@ impl<W: Write> Interpreter<W> {
     }
 
     fn eval(&mut self, expr: &Expr) -> Result<Value, Unwind> {
-        match expr {
-            Expr::Int(n) => Ok(Value::Int(*n)),
-            Expr::Bool(b) => Ok(Value::Bool(*b)),
-            Expr::Var(name) => Ok(self.lookup(name)?),
-            Expr::Call { name, args } => {
+        match &expr.kind {
+            ExprKind::Int(n) => Ok(Value::Int(*n)),
+            ExprKind::Bool(b) => Ok(Value::Bool(*b)),
+            ExprKind::Var(name) => Ok(self.lookup(name)?),
+            ExprKind::Call { name, args } => {
                 let args = args
                     .iter()
                     .map(|arg| self.eval(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 self.call(name, args)
             }
-            Expr::Binary { op, left, right } => {
+            ExprKind::Binary { op, left, right } => {
                 let l = self.eval(left)?;
                 let r = self.eval(right)?;
                 Ok(binary(op, l, r)?)
             }
-            Expr::Unary { op, operand } => {
+            ExprKind::Unary { op, operand } => {
                 let value = self.eval(operand)?;
                 match op {
                     UnaryOp::Neg => Ok(checked(int(value)?.checked_neg())?),
                     UnaryOp::Not => Ok(Value::Bool(!boolean(value)?)),
                 }
             }
-            Expr::Logical { op, left, right } => {
+            ExprKind::Logical { op, left, right } => {
                 let l = boolean(self.eval(left)?)?;
                 match (op, l) {
                     (LogicalOp::And, false) => Ok(Value::Bool(false)),
@@ -179,8 +179,8 @@ impl<W: Write> Interpreter<W> {
                     _ => Ok(Value::Bool(boolean(self.eval(right)?)?)),
                 }
             }
-            Expr::Block(block) => self.block(block),
-            Expr::If {
+            ExprKind::Block(block) => self.block(block),
+            ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
@@ -193,13 +193,13 @@ impl<W: Write> Interpreter<W> {
                     Ok(Value::Unit)
                 }
             }
-            Expr::While { cond, body } => {
+            ExprKind::While { cond, body } => {
                 while boolean(self.eval(cond)?)? {
                     self.block(body)?;
                 }
                 Ok(Value::Unit)
             }
-            Expr::Return(value) => {
+            ExprKind::Return(value) => {
                 let value = match value {
                     Some(value) => self.eval(value)?,
                     None => Value::Unit,
