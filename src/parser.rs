@@ -84,7 +84,7 @@ impl Parser {
                     if self.peek() == &Token::Semicolon {
                         self.advance();
                         stmts.push(Stmt::Expr(value));
-                    } else if matches!(value, Expr::Block(_))
+                    } else if matches!(value, Expr::Block(_) | Expr::If { .. })
                         && !matches!(self.peek(), Token::Eof | Token::RBrace)
                     {
                         stmts.push(Stmt::Expr(value));
@@ -251,6 +251,7 @@ impl Parser {
                 }
             }
             Token::LBrace => Ok(Expr::Block(self.block()?)),
+            Token::If => self.if_expr(),
             Token::LParen => {
                 let inner = self.expr()?;
                 self.expect(Token::RParen, "')'")?;
@@ -262,6 +263,35 @@ impl Parser {
             }
             .at(pos)),
         }
+    }
+
+    fn if_expr(&mut self) -> Result<Expr, ParseError> {
+        let cond = self.expr()?;
+        self.expect(Token::LBrace, "'{'")?;
+        let then_branch = self.block()?;
+        let else_branch = if self.peek() == &Token::Else {
+            self.advance();
+            let pos = self.peek_pos();
+            let branch = match self.advance() {
+                Token::LBrace => Expr::Block(self.block()?),
+                Token::If => self.if_expr()?,
+                other => {
+                    return Err(ParseErrorKind::Expected {
+                        what: "'{' or 'if' after 'else'",
+                        found: other,
+                    }
+                    .at(pos));
+                }
+            };
+            Some(Box::new(branch))
+        } else {
+            None
+        };
+        Ok(Expr::If {
+            cond: Box::new(cond),
+            then_branch,
+            else_branch,
+        })
     }
 
     fn args(&mut self) -> Result<Vec<Expr>, ParseError> {
@@ -393,6 +423,17 @@ mod tests {
             stmts,
             expr: expr.map(Box::new),
         })
+    }
+
+    fn if_expr(cond: Expr, then_branch: Expr, else_branch: Option<Expr>) -> Expr {
+        let Expr::Block(then_branch) = then_branch else {
+            panic!("then branch must be a block");
+        };
+        Expr::If {
+            cond: Box::new(cond),
+            then_branch,
+            else_branch: else_branch.map(Box::new),
+        }
     }
 
     #[test]
@@ -636,6 +677,73 @@ mod tests {
             Ok(Program {
                 stmts: vec![Stmt::Expr(block(
                     vec![Stmt::Expr(call("print", vec![int(1)]))],
+                    None
+                ))],
+                expr: Some(int(2))
+            })
+        );
+    }
+
+    #[test]
+    fn if_without_else() {
+        assert_eq!(
+            parse("if x { 1 }"),
+            Ok(if_expr(var("x"), block(vec![], Some(int(1))), None))
+        );
+    }
+
+    #[test]
+    fn if_else() {
+        assert_eq!(
+            parse("if a < b { a } else { b }"),
+            Ok(if_expr(
+                bin(Lt, var("a"), var("b")),
+                block(vec![], Some(var("a"))),
+                Some(block(vec![], Some(var("b"))))
+            ))
+        );
+    }
+
+    #[test]
+    fn else_if_chain() {
+        assert_eq!(
+            parse("if a { 1 } else if b { 2 } else { 3 }"),
+            Ok(if_expr(
+                var("a"),
+                block(vec![], Some(int(1))),
+                Some(if_expr(
+                    var("b"),
+                    block(vec![], Some(int(2))),
+                    Some(block(vec![], Some(int(3))))
+                ))
+            ))
+        );
+    }
+
+    #[test]
+    fn if_in_expression() {
+        assert_eq!(
+            parse("1 + if c { 2 } else { 3 }"),
+            Ok(bin(
+                Add,
+                int(1),
+                if_expr(
+                    var("c"),
+                    block(vec![], Some(int(2))),
+                    Some(block(vec![], Some(int(3))))
+                )
+            ))
+        );
+    }
+
+    #[test]
+    fn if_statement_without_semicolon() {
+        assert_eq!(
+            parse_program("if c { print(1); } 2"),
+            Ok(Program {
+                stmts: vec![Stmt::Expr(if_expr(
+                    var("c"),
+                    block(vec![Stmt::Expr(call("print", vec![int(1)]))], None),
                     None
                 ))],
                 expr: Some(int(2))
@@ -901,6 +1009,34 @@ mod tests {
         assert_eq!(
             parse_program("1; }"),
             Err(at(ParseErrorKind::Unexpected(Token::RBrace), 1, 4))
+        );
+    }
+
+    #[test]
+    fn if_without_braces() {
+        assert_eq!(
+            parse("if true 1"),
+            Err(at(expected("'{'", Token::Int(1)), 1, 9))
+        );
+    }
+
+    #[test]
+    fn else_without_braces() {
+        assert_eq!(
+            parse("if true { 1 } else 2"),
+            Err(at(
+                expected("'{' or 'if' after 'else'", Token::Int(2)),
+                1,
+                20
+            ))
+        );
+    }
+
+    #[test]
+    fn if_without_condition() {
+        assert_eq!(
+            parse("if { 1 }"),
+            Err(at(expected("'{'", Token::Eof), 1, 9))
         );
     }
 }

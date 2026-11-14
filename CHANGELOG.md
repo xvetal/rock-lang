@@ -7,6 +7,7 @@
 - Comparison operators `==`, `!=`, `<`, `<=`, `>`, `>=`; comparisons cannot be chained
 - Logical operators `!`, `&&`, `||`; `&&` and `||` short-circuit
 - Blocks `{ ... }`: a block is an expression whose value is its last expression; `let` inside a block is local to it
+- `if`/`else` expressions, including `else if` chains; `if` without `else` evaluates to `()`
 
 ### Changed
 - Error messages show tokens as written: `unexpected ')'` instead of `unexpected token: RParen`

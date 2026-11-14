@@ -95,6 +95,19 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             Expr::Block(block) => self.block(block),
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                if boolean(self.eval(cond)?)? {
+                    self.block(then_branch)
+                } else if let Some(else_branch) = else_branch {
+                    self.eval(else_branch)
+                } else {
+                    Ok(Value::Unit)
+                }
+            }
         }
     }
 
@@ -335,6 +348,42 @@ mod tests {
     }
 
     #[test]
+    fn if_else() {
+        assert_eq!(run("if 1 < 2 { 10 } else { 20 }"), Ok(10));
+        assert_eq!(run("if 1 > 2 { 10 } else { 20 }"), Ok(20));
+    }
+
+    #[test]
+    fn if_without_else_is_unit() {
+        assert_eq!(value("if false { 1 }"), Ok(Value::Unit));
+    }
+
+    #[test]
+    fn else_if_chain() {
+        let program = "let x = 5; if x < 0 { 1 } else if x < 10 { 2 } else { 3 }";
+        assert_eq!(run(program), Ok(2));
+    }
+
+    #[test]
+    fn if_value_in_let() {
+        assert_eq!(run("let x = if true { 1 } else { 2 }; x + 1"), Ok(2));
+    }
+
+    #[test]
+    fn untaken_branch_is_not_evaluated() {
+        assert_eq!(
+            output("if true { print(1); } else { print(2); }"),
+            Ok("1\n".to_string())
+        );
+        assert_eq!(run("if false { 1 / 0 } else { 2 }"), Ok(2));
+    }
+
+    #[test]
+    fn if_branch_has_own_scope() {
+        assert_eq!(run("let x = 1; if true { let x = 2; } x"), Ok(1));
+    }
+
+    #[test]
     fn let_bindings() {
         assert_eq!(run("let x = 1 + 2; let y = x * 3; y - 1"), Ok(8));
     }
@@ -425,6 +474,14 @@ mod tests {
             Err("division by zero".to_string())
         );
         assert_eq!(exec(&mut interp, "x"), Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn if_condition_must_be_bool() {
+        assert_eq!(
+            run("if 1 { 2 } else { 3 }"),
+            Err("expected bool, got 1".to_string())
+        );
     }
 
     #[test]

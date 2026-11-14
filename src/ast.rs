@@ -48,6 +48,11 @@ pub enum Expr {
         right: Box<Expr>,
     },
     Block(Block),
+    If {
+        cond: Box<Expr>,
+        then_branch: Block,
+        else_branch: Option<Box<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
