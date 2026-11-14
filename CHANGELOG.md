@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-14
+
 ### Added
 - Boolean literals `true` and `false`
 - Comparison operators `==`, `!=`, `<`, `<=`, `>`, `>=`; comparisons cannot be chained

@@ -4,13 +4,16 @@ A toy programming language written in Rust, built for learning.
 
 ## Status
 
-Version 0.3.0: integer expressions, variables, and `print`.
+Version 0.4.0: booleans, blocks, `if`/`else`, assignment, and `while` loops.
 
-- Integer literals, `+ - * /`, unary minus, parentheses
+- Integer and boolean literals, `+ - * /`, unary minus, parentheses
+- Comparisons `== != < <= > >=` and logical `! && ||` with short-circuit
 - Operator precedence and left associativity
-- Variables with `let`, including shadowing
+- Variables with `let`, including shadowing, and assignment `x = value;`
+- Blocks with lexical scope; `if`/`else` and blocks are expressions
+- `while` loops
 - Function calls and the built-in `print`
-- Errors for division by zero, integer overflow, and undefined names
+- Errors with line and column for parse errors; division by zero, integer overflow, undefined names, and type errors at runtime
 - Interactive REPL and running programs from a file
 
 ## Goals
@@ -22,13 +25,17 @@ Version 0.3.0: integer expressions, variables, and `print`.
 ## Example
 
 ```rock
-let x = 1 + 2 * 3;
-print(x);
-let y = x * x;
-y - x
+let n = 5;
+let acc = 1;
+while n > 1 {
+    acc = acc * n;
+    n = n - 1;
+}
+print(acc);
+acc > 100
 ```
 
-Running it prints `7` from `print`, then `42`, the value of the final expression.
+Running it prints `120` from `print`, then `true`, the value of the final expression.
 
 ## Usage
 
