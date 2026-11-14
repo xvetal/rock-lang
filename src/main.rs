@@ -7,12 +7,23 @@ mod value;
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, Write};
+use std::panic;
 use std::process::ExitCode;
+use std::thread;
 
-use interp::Interpreter;
+use interp::{Interpreter, STACK_SIZE};
 use value::Value;
 
 fn main() -> ExitCode {
+    thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(cli)
+        .expect("interpreter thread should start")
+        .join()
+        .unwrap_or_else(|payload| panic::resume_unwind(payload))
+}
+
+fn cli() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     match args.as_slice() {
         [_] => {

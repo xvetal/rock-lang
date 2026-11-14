@@ -21,6 +21,7 @@ pub enum RuntimeError {
     CannotCompare(Value, Value),
     DivisionByZero,
     IntegerOverflow,
+    StackOverflow,
     Output(io::ErrorKind),
 }
 
@@ -43,6 +44,9 @@ impl fmt::Display for RuntimeError {
             RuntimeError::CannotCompare(l, r) => write!(f, "cannot compare {l} with {r}"),
             RuntimeError::DivisionByZero => write!(f, "division by zero"),
             RuntimeError::IntegerOverflow => write!(f, "integer overflow"),
+            RuntimeError::StackOverflow => {
+                write!(f, "stack overflow: more than {MAX_CALL_DEPTH} nested calls")
+            }
             RuntimeError::Output(kind) => write!(f, "cannot write output: {kind}"),
         }
     }
@@ -59,8 +63,13 @@ impl From<RuntimeError> for Unwind {
     }
 }
 
+pub const MAX_CALL_DEPTH: usize = 1000;
+// Each nested call takes several Rust frames; in debug builds that can be ~40 KiB per call.
+pub const STACK_SIZE: usize = 256 * 1024 * 1024;
+
 pub struct Interpreter<W: Write> {
     scopes: Vec<HashMap<String, Value>>,
+    depth: usize,
     out: W,
 }
 
@@ -68,6 +77,7 @@ impl<W: Write> Interpreter<W> {
     pub fn new(out: W) -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            depth: 0,
             out,
         }
     }
@@ -232,10 +242,15 @@ impl<W: Write> Interpreter<W> {
             }
             .into());
         }
+        if self.depth == MAX_CALL_DEPTH {
+            return Err(RuntimeError::StackOverflow.into());
+        }
         let params = decl.params.iter().cloned().zip(args).collect();
         let caller_scopes = self.scopes.split_off(1);
         self.scopes.push(params);
+        self.depth += 1;
         let result = self.sequence(&decl.body.stmts, decl.body.expr.as_deref());
+        self.depth -= 1;
         self.scopes.truncate(1);
         self.scopes.extend(caller_scopes);
         match result {
@@ -304,6 +319,7 @@ mod tests {
     use super::*;
     use crate::lexer::tokenize;
     use crate::parser::Parser;
+    use std::thread;
 
     fn exec(interp: &mut Interpreter<Vec<u8>>, input: &str) -> Result<Value, RuntimeError> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
@@ -329,6 +345,15 @@ mod tests {
 
     fn mismatch(expected: &'static str, found: Value) -> RuntimeError {
         RuntimeError::TypeMismatch { expected, found }
+    }
+
+    fn with_big_stack(f: impl FnOnce() + Send + 'static) {
+        thread::Builder::new()
+            .stack_size(STACK_SIZE)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap()
     }
 
     fn undefined(name: &str) -> RuntimeError {
@@ -681,6 +706,14 @@ mod tests {
     }
 
     #[test]
+    fn deep_recursion_within_limit() {
+        with_big_stack(|| {
+            let program = "fn down(n) { if n == 1 { return 1; } down(n - 1) } down(1000)";
+            assert_eq!(run(program), Ok(1));
+        });
+    }
+
+    #[test]
     fn let_bindings() {
         assert_eq!(run("let x = 1 + 2; let y = x * 3; y - 1"), Ok(8));
     }
@@ -846,6 +879,27 @@ mod tests {
             Err(RuntimeError::DivisionByZero)
         );
         assert_eq!(exec(&mut interp, "let z = 1; z"), Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn infinite_recursion() {
+        with_big_stack(|| {
+            assert_eq!(run("fn f() { f() } f()"), Err(RuntimeError::StackOverflow));
+        });
+    }
+
+    #[test]
+    fn depth_restored_after_stack_overflow() {
+        with_big_stack(|| {
+            let mut interp = Interpreter::new(Vec::new());
+            let program = "fn down(n) { if n == 1 { return 1; } down(n - 1) }";
+            assert_eq!(exec(&mut interp, program), Ok(Value::Unit));
+            assert_eq!(
+                exec(&mut interp, "down(1001)"),
+                Err(RuntimeError::StackOverflow)
+            );
+            assert_eq!(exec(&mut interp, "down(1000)"), Ok(Value::Int(1)));
+        });
     }
 
     #[test]
@@ -1020,6 +1074,10 @@ mod tests {
         assert_eq!(
             RuntimeError::IntegerOverflow.to_string(),
             "integer overflow"
+        );
+        assert_eq!(
+            RuntimeError::StackOverflow.to_string(),
+            "stack overflow: more than 1000 nested calls"
         );
         assert_eq!(
             RuntimeError::Output(io::ErrorKind::BrokenPipe).to_string(),
