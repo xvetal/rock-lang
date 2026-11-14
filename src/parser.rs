@@ -1,6 +1,7 @@
 use std::fmt;
+use std::rc::Rc;
 
-use crate::ast::{BinaryOp, Block, Expr, LogicalOp, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Block, Expr, FnDecl, LogicalOp, Program, Stmt, UnaryOp};
 use crate::lexer::{Located, Pos, Token};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +21,7 @@ pub enum ParseErrorKind {
     Expected { what: &'static str, found: Token },
     Unexpected(Token),
     IntegerTooLarge,
+    NestedFn,
 }
 
 impl ParseErrorKind {
@@ -42,6 +44,9 @@ impl fmt::Display for ParseErrorKind {
             }
             ParseErrorKind::Unexpected(token) => write!(f, "unexpected '{token}'"),
             ParseErrorKind::IntegerTooLarge => write!(f, "integer literal is too large"),
+            ParseErrorKind::NestedFn => {
+                write!(f, "functions can only be declared at the top level")
+            }
         }
     }
 }
@@ -57,7 +62,7 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
-        let (stmts, expr) = self.sequence()?;
+        let (stmts, expr) = self.sequence(true)?;
         if self.peek() != &Token::Eof {
             return Err(ParseErrorKind::Unexpected(self.peek().clone()).at(self.peek_pos()));
         }
@@ -65,7 +70,7 @@ impl Parser {
     }
 
     fn block(&mut self) -> Result<Block, ParseError> {
-        let (stmts, expr) = self.sequence()?;
+        let (stmts, expr) = self.sequence(false)?;
         self.expect(Token::RBrace, "'}'")?;
         Ok(Block {
             stmts,
@@ -73,12 +78,14 @@ impl Parser {
         })
     }
 
-    fn sequence(&mut self) -> Result<(Vec<Stmt>, Option<Expr>), ParseError> {
+    fn sequence(&mut self, top_level: bool) -> Result<(Vec<Stmt>, Option<Expr>), ParseError> {
         let mut stmts = Vec::new();
         loop {
             match self.peek() {
                 Token::Eof | Token::RBrace => return Ok((stmts, None)),
                 Token::Let => stmts.push(self.let_stmt()?),
+                Token::Fn if top_level => stmts.push(self.fn_decl()?),
+                Token::Fn => return Err(ParseErrorKind::NestedFn.at(self.peek_pos())),
                 Token::Ident(name) if self.peek_next() == &Token::Eq => {
                     let name = name.clone();
                     stmts.push(self.assign_stmt(name)?);
@@ -102,21 +109,21 @@ impl Parser {
 
     fn let_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.advance();
-        let pos = self.peek_pos();
-        let name = match self.advance() {
-            Token::Ident(name) => name,
-            other => {
-                return Err(ParseErrorKind::Expected {
-                    what: "variable name after 'let'",
-                    found: other,
-                }
-                .at(pos));
-            }
-        };
+        let name = self.ident("variable name after 'let'")?;
         self.expect(Token::Eq, "'='")?;
         let value = self.expr()?;
         self.expect(Token::Semicolon, "';'")?;
         Ok(Stmt::Let { name, value })
+    }
+
+    fn fn_decl(&mut self) -> Result<Stmt, ParseError> {
+        self.advance();
+        let name = self.ident("function name after 'fn'")?;
+        self.expect(Token::LParen, "'('")?;
+        let params = self.list(|p| p.ident("parameter name"))?;
+        self.expect(Token::LBrace, "'{'")?;
+        let body = self.block()?;
+        Ok(Stmt::Fn(Rc::new(FnDecl { name, params, body })))
     }
 
     fn assign_stmt(&mut self, name: String) -> Result<Stmt, ParseError> {
@@ -256,7 +263,7 @@ impl Parser {
             Token::Ident(name) => {
                 if self.peek() == &Token::LParen {
                     self.advance();
-                    let args = self.args()?;
+                    let args = self.list(Self::expr)?;
                     Ok(Expr::Call { name, args })
                 } else {
                     Ok(Expr::Var(name))
@@ -317,18 +324,21 @@ impl Parser {
         })
     }
 
-    fn args(&mut self) -> Result<Vec<Expr>, ParseError> {
-        let mut args = Vec::new();
+    fn list<T>(
+        &mut self,
+        mut item: impl FnMut(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<Vec<T>, ParseError> {
+        let mut items = Vec::new();
         if self.peek() == &Token::RParen {
             self.advance();
-            return Ok(args);
+            return Ok(items);
         }
         loop {
-            args.push(self.expr()?);
+            items.push(item(self)?);
             let pos = self.peek_pos();
             match self.advance() {
                 Token::Comma => {}
-                Token::RParen => return Ok(args),
+                Token::RParen => return Ok(items),
                 other => {
                     return Err(ParseErrorKind::Expected {
                         what: "',' or ')'",
@@ -365,6 +375,14 @@ impl Parser {
         let pos = self.peek_pos();
         match self.advance() {
             token if token == expected => Ok(()),
+            other => Err(ParseErrorKind::Expected { what, found: other }.at(pos)),
+        }
+    }
+
+    fn ident(&mut self, what: &'static str) -> Result<String, ParseError> {
+        let pos = self.peek_pos();
+        match self.advance() {
+            Token::Ident(name) => Ok(name),
             other => Err(ParseErrorKind::Expected { what, found: other }.at(pos)),
         }
     }
@@ -462,6 +480,17 @@ mod tests {
             then_branch,
             else_branch: else_branch.map(Box::new),
         }
+    }
+
+    fn fn_decl(name: &str, params: &[&str], body: Expr) -> Stmt {
+        let Expr::Block(body) = body else {
+            panic!("function body must be a block");
+        };
+        Stmt::Fn(Rc::new(FnDecl {
+            name: name.to_string(),
+            params: params.iter().map(|p| p.to_string()).collect(),
+            body,
+        }))
     }
 
     fn while_expr(cond: Expr, body: Expr) -> Expr {
@@ -831,6 +860,32 @@ mod tests {
     }
 
     #[test]
+    fn function_declaration() {
+        assert_eq!(
+            parse_program("fn add(a, b) { a + b } add(1, 2)"),
+            Ok(Program {
+                stmts: vec![fn_decl(
+                    "add",
+                    &["a", "b"],
+                    block(vec![], Some(bin(Add, var("a"), var("b"))))
+                )],
+                expr: Some(call("add", vec![int(1), int(2)]))
+            })
+        );
+    }
+
+    #[test]
+    fn function_without_parameters() {
+        assert_eq!(
+            parse_program("fn zero() { 0 }"),
+            Ok(Program {
+                stmts: vec![fn_decl("zero", &[], block(vec![], Some(int(0))))],
+                expr: None
+            })
+        );
+    }
+
+    #[test]
     fn empty_program() {
         assert_eq!(
             parse_program(""),
@@ -906,6 +961,10 @@ mod tests {
         assert_eq!(
             ParseErrorKind::IntegerTooLarge.to_string(),
             "integer literal is too large"
+        );
+        assert_eq!(
+            ParseErrorKind::NestedFn.to_string(),
+            "functions can only be declared at the top level"
         );
         assert_eq!(
             at(expected("expression", Token::Eof), 1, 4).to_string(),
@@ -1148,6 +1207,42 @@ mod tests {
         assert_eq!(
             parse("while true 1"),
             Err(at(expected("'{'", Token::Int(1)), 1, 12))
+        );
+    }
+
+    #[test]
+    fn nested_function() {
+        assert_eq!(
+            parse_program("{ fn f() {} }"),
+            Err(at(ParseErrorKind::NestedFn, 1, 3))
+        );
+    }
+
+    #[test]
+    fn function_without_name() {
+        assert_eq!(
+            parse_program("fn (a) {}"),
+            Err(at(
+                expected("function name after 'fn'", Token::LParen),
+                1,
+                4
+            ))
+        );
+    }
+
+    #[test]
+    fn parameter_must_be_name() {
+        assert_eq!(
+            parse_program("fn f(1) {}"),
+            Err(at(expected("parameter name", Token::Int(1)), 1, 6))
+        );
+    }
+
+    #[test]
+    fn function_without_braces() {
+        assert_eq!(
+            parse_program("fn f() 1"),
+            Err(at(expected("'{'", Token::Int(1)), 1, 8))
         );
     }
 }

@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOp {
     Add,
@@ -66,9 +68,17 @@ pub struct Block {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct FnDecl {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: Block,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Let { name: String, value: Expr },
     Assign { name: String, value: Expr },
+    Fn(Rc<FnDecl>),
     Expr(Expr),
 }
 

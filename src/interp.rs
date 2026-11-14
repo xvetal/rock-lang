@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, Write};
 
-use crate::ast::{BinaryOp, Block, Expr, LogicalOp, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Block, Expr, FnDecl, LogicalOp, Program, Stmt, UnaryOp};
 use crate::value::Value;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,7 +33,10 @@ impl fmt::Display for RuntimeError {
                 name,
                 expected,
                 found,
-            } => write!(f, "{name} expects {expected} argument, got {found}"),
+            } => {
+                let s = if *expected == 1 { "" } else { "s" };
+                write!(f, "{name} expects {expected} argument{s}, got {found}")
+            }
             RuntimeError::TypeMismatch { expected, found } => {
                 write!(f, "expected {expected}, got {found}")
             }
@@ -80,6 +83,7 @@ impl<W: Write> Interpreter<W> {
                     let value = self.eval(value)?;
                     self.assign(name, value)?;
                 }
+                Stmt::Fn(decl) => self.define(&decl.name, Value::Function(decl.clone())),
                 Stmt::Expr(expr) => {
                     self.eval(expr)?;
                 }
@@ -114,7 +118,7 @@ impl<W: Write> Interpreter<W> {
             .iter()
             .rev()
             .find_map(|scope| scope.get(name))
-            .copied()
+            .cloned()
             .ok_or_else(|| RuntimeError::UndefinedVariable(name.to_string()))
     }
 
@@ -128,7 +132,7 @@ impl<W: Write> Interpreter<W> {
                     .iter()
                     .map(|arg| self.eval(arg))
                     .collect::<Result<Vec<_>, _>>()?;
-                self.call(name, &args)
+                self.call(name, args)
             }
             Expr::Binary { op, left, right } => {
                 let l = self.eval(left)?;
@@ -173,10 +177,15 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    fn call(&mut self, name: &str, args: &[Value]) -> Result<Value, RuntimeError> {
-        match name {
-            "print" => {
-                let [value] = args else {
+    fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        match self.lookup(name) {
+            Ok(Value::Function(decl)) => self.call_function(&decl, args),
+            Ok(found) => Err(RuntimeError::TypeMismatch {
+                expected: "function",
+                found,
+            }),
+            Err(_) if name == "print" => {
+                let [value] = args.as_slice() else {
                     return Err(RuntimeError::ArgumentCount {
                         name: name.to_string(),
                         expected: 1,
@@ -188,6 +197,23 @@ impl<W: Write> Interpreter<W> {
             }
             _ => Err(RuntimeError::UndefinedFunction(name.to_string())),
         }
+    }
+
+    fn call_function(&mut self, decl: &FnDecl, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        if args.len() != decl.params.len() {
+            return Err(RuntimeError::ArgumentCount {
+                name: decl.name.clone(),
+                expected: decl.params.len(),
+                found: args.len(),
+            });
+        }
+        let params = decl.params.iter().cloned().zip(args).collect();
+        let caller_scopes = self.scopes.split_off(1);
+        self.scopes.push(params);
+        let result = self.sequence(&decl.body.stmts, decl.body.expr.as_deref());
+        self.scopes.truncate(1);
+        self.scopes.extend(caller_scopes);
+        result
     }
 }
 
@@ -501,6 +527,84 @@ mod tests {
     }
 
     #[test]
+    fn function_call() {
+        assert_eq!(run("fn add(a, b) { a + b } add(1, 2)"), Ok(3));
+    }
+
+    #[test]
+    fn function_declaration_is_unit() {
+        assert_eq!(value("fn f() {}"), Ok(Value::Unit));
+    }
+
+    #[test]
+    fn function_without_parameters() {
+        assert_eq!(
+            output("fn hello() { print(1); } hello(); hello();"),
+            Ok("1\n1\n".to_string())
+        );
+    }
+
+    #[test]
+    fn recursion() {
+        let program = "fn fact(n) { if n <= 1 { 1 } else { n * fact(n - 1) } } fact(10)";
+        assert_eq!(run(program), Ok(3628800));
+    }
+
+    #[test]
+    fn function_sees_globals() {
+        assert_eq!(run("let base = 10; fn f(x) { base + x } f(1)"), Ok(11));
+    }
+
+    #[test]
+    fn function_can_assign_global() {
+        assert_eq!(
+            run("let count = 0; fn inc() { count = count + 1; } inc(); inc(); count"),
+            Ok(2)
+        );
+    }
+
+    #[test]
+    fn parameter_shadows_global() {
+        assert_eq!(run("let x = 1; fn f(x) { x } f(2) + x"), Ok(3));
+    }
+
+    #[test]
+    fn locals_do_not_leak_from_function() {
+        assert_eq!(run("let x = 1; fn f() { let x = 2; x } f() + x"), Ok(3));
+    }
+
+    #[test]
+    fn function_as_value() {
+        assert_eq!(
+            run("fn add(a, b) { a + b } let plus = add; plus(1, 2)"),
+            Ok(3)
+        );
+    }
+
+    #[test]
+    fn function_display() {
+        assert_eq!(
+            output("fn add(a, b) { a + b } print(add);"),
+            Ok("<fn add>\n".to_string())
+        );
+    }
+
+    #[test]
+    fn let_shadows_function() {
+        assert_eq!(run("fn f() { 1 } let f = 2; f"), Ok(2));
+    }
+
+    #[test]
+    fn user_function_shadows_print() {
+        assert_eq!(output("fn print(x) { x } print(1);"), Ok(String::new()));
+    }
+
+    #[test]
+    fn caller_scopes_restored_after_call() {
+        assert_eq!(run("fn f() { 1 } { let y = 2; f() + y }"), Ok(3));
+    }
+
+    #[test]
     fn let_bindings() {
         assert_eq!(run("let x = 1 + 2; let y = x * 3; y - 1"), Ok(8));
     }
@@ -614,6 +718,58 @@ mod tests {
             Err(RuntimeError::DivisionByZero)
         );
         assert_eq!(exec(&mut interp, "i"), Ok(Value::Int(3)));
+    }
+
+    #[test]
+    fn function_does_not_see_caller_locals() {
+        assert_eq!(run("fn f() { y } { let y = 1; f() }"), Err(undefined("y")));
+    }
+
+    #[test]
+    fn call_before_declaration() {
+        assert_eq!(
+            run("f(); fn f() {} 0"),
+            Err(RuntimeError::UndefinedFunction("f".to_string()))
+        );
+    }
+
+    #[test]
+    fn wrong_argument_count() {
+        assert_eq!(
+            run("fn add(a, b) { a + b } add(1)"),
+            Err(RuntimeError::ArgumentCount {
+                name: "add".to_string(),
+                expected: 2,
+                found: 1
+            })
+        );
+    }
+
+    #[test]
+    fn call_non_function() {
+        assert_eq!(
+            run("let x = 1; x(2)"),
+            Err(mismatch("function", Value::Int(1)))
+        );
+    }
+
+    #[test]
+    fn compare_functions() {
+        assert!(matches!(
+            value("fn f() {} f == f"),
+            Err(RuntimeError::CannotCompare(..))
+        ));
+    }
+
+    #[test]
+    fn scopes_restored_after_error_in_function() {
+        let mut interp = Interpreter::new(Vec::new());
+        assert_eq!(exec(&mut interp, "fn f() { 1 / 0 }"), Ok(Value::Unit));
+        assert_eq!(
+            exec(&mut interp, "{ { f() } }"),
+            Err(RuntimeError::DivisionByZero)
+        );
+        assert_eq!(exec(&mut interp, "let z = 1; z"), Ok(Value::Int(1)));
     }
 
     #[test]
@@ -766,6 +922,15 @@ mod tests {
             }
             .to_string(),
             "print expects 1 argument, got 2"
+        );
+        assert_eq!(
+            RuntimeError::ArgumentCount {
+                name: "add".to_string(),
+                expected: 2,
+                found: 1
+            }
+            .to_string(),
+            "add expects 2 arguments, got 1"
         );
         assert_eq!(
             mismatch("bool", Value::Unit).to_string(),

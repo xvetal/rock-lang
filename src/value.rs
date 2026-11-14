@@ -1,10 +1,14 @@
 use std::fmt;
+use std::rc::Rc;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+use crate::ast::FnDecl;
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
     Bool(bool),
     Unit,
+    Function(Rc<FnDecl>),
 }
 
 impl fmt::Display for Value {
@@ -13,6 +17,7 @@ impl fmt::Display for Value {
             Value::Int(n) => write!(f, "{n}"),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Unit => write!(f, "()"),
+            Value::Function(decl) => write!(f, "<fn {}>", decl.name),
         }
     }
 }
