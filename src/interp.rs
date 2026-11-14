@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 
-use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Expr, LogicalOp, Program, Stmt, UnaryOp};
 use crate::value::Value;
 
 pub struct Interpreter<W: Write> {
@@ -57,11 +57,19 @@ impl<W: Write> Interpreter<W> {
                 binary(op, l, r)
             }
             Expr::Unary { op, operand } => {
-                let value = int(self.eval(operand)?)?;
-                let result = match op {
-                    UnaryOp::Neg => value.checked_neg(),
-                };
-                result.map(Value::Int).ok_or("integer overflow".to_string())
+                let value = self.eval(operand)?;
+                match op {
+                    UnaryOp::Neg => checked(int(value)?.checked_neg()),
+                    UnaryOp::Not => Ok(Value::Bool(!boolean(value)?)),
+                }
+            }
+            Expr::Logical { op, left, right } => {
+                let l = boolean(self.eval(left)?)?;
+                match (op, l) {
+                    (LogicalOp::And, false) => Ok(Value::Bool(false)),
+                    (LogicalOp::Or, true) => Ok(Value::Bool(true)),
+                    _ => Ok(Value::Bool(boolean(self.eval(right)?)?)),
+                }
             }
         }
     }
@@ -114,6 +122,13 @@ fn int(value: Value) -> Result<i64, String> {
     match value {
         Value::Int(n) => Ok(n),
         other => Err(format!("expected integer, got {other}")),
+    }
+}
+
+fn boolean(value: Value) -> Result<bool, String> {
+    match value {
+        Value::Bool(b) => Ok(b),
+        other => Err(format!("expected bool, got {other}")),
     }
 }
 
@@ -240,6 +255,37 @@ mod tests {
         assert_eq!(value("true == false"), Ok(Value::Bool(false)));
         assert_eq!(value("(1 < 2) != false"), Ok(Value::Bool(true)));
         assert_eq!(value("print(1) == print(2)"), Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn logical_not() {
+        assert_eq!(value("!true"), Ok(Value::Bool(false)));
+        assert_eq!(value("!(1 > 2)"), Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn and() {
+        assert_eq!(value("true && true"), Ok(Value::Bool(true)));
+        assert_eq!(value("true && false"), Ok(Value::Bool(false)));
+        assert_eq!(value("false && true"), Ok(Value::Bool(false)));
+        assert_eq!(value("false && false"), Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn or() {
+        assert_eq!(value("true || true"), Ok(Value::Bool(true)));
+        assert_eq!(value("true || false"), Ok(Value::Bool(true)));
+        assert_eq!(value("false || true"), Ok(Value::Bool(true)));
+        assert_eq!(value("false || false"), Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn short_circuit() {
+        assert_eq!(
+            output("false && print(1); true || print(2);"),
+            Ok(String::new())
+        );
+        assert_eq!(value("false && 1 / 0 == 0"), Ok(Value::Bool(false)));
     }
 
     #[test]
@@ -371,6 +417,24 @@ mod tests {
         assert_eq!(
             value("false < true"),
             Err("expected integer, got false".to_string())
+        );
+    }
+
+    #[test]
+    fn not_of_int() {
+        assert_eq!(value("!1"), Err("expected bool, got 1".to_string()));
+    }
+
+    #[test]
+    fn and_with_int() {
+        assert_eq!(value("1 && true"), Err("expected bool, got 1".to_string()));
+    }
+
+    #[test]
+    fn evaluated_right_operand_must_be_bool() {
+        assert_eq!(
+            value("true && print(1)"),
+            Err("expected bool, got ()".to_string())
         );
     }
 

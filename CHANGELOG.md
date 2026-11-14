@@ -5,6 +5,7 @@
 ### Added
 - Boolean literals `true` and `false`
 - Comparison operators `==`, `!=`, `<`, `<=`, `>`, `>=`; comparisons cannot be chained
+- Logical operators `!`, `&&`, `||`; `&&` and `||` short-circuit
 
 ### Changed
 - Error messages show tokens as written: `unexpected ')'` instead of `unexpected token: RParen`

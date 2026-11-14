@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Expr, LogicalOp, Program, Stmt, UnaryOp};
 use crate::lexer::{Located, Pos, Token};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,7 +101,35 @@ impl Parser {
     }
 
     fn expr(&mut self) -> Result<Expr, ParseError> {
-        self.comparison()
+        self.or()
+    }
+
+    fn or(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.and()?;
+        while self.peek() == &Token::OrOr {
+            self.advance();
+            let right = self.and()?;
+            left = Expr::Logical {
+                op: LogicalOp::Or,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn and(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.comparison()?;
+        while self.peek() == &Token::AndAnd {
+            self.advance();
+            let right = self.comparison()?;
+            left = Expr::Logical {
+                op: LogicalOp::And,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
     }
 
     fn comparison(&mut self) -> Result<Expr, ParseError> {
@@ -163,6 +191,14 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Result<Expr, ParseError> {
+        if self.peek() == &Token::Bang {
+            self.advance();
+            let operand = self.unary()?;
+            return Ok(Expr::Unary {
+                op: UnaryOp::Not,
+                operand: Box::new(operand),
+            });
+        }
         if self.peek() == &Token::Minus {
             self.advance();
             if let &Token::Int(n) = self.peek()
@@ -265,6 +301,7 @@ mod tests {
     use super::*;
     use crate::lexer::tokenize;
     use BinaryOp::{Add, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Sub};
+    use LogicalOp::{And, Or};
 
     fn parse_program(input: &str) -> Result<Program, ParseError> {
         Parser::new(tokenize(input).unwrap()).parse()
@@ -317,6 +354,21 @@ mod tests {
         Expr::Unary {
             op: UnaryOp::Neg,
             operand: Box::new(operand),
+        }
+    }
+
+    fn not(operand: Expr) -> Expr {
+        Expr::Unary {
+            op: UnaryOp::Not,
+            operand: Box::new(operand),
+        }
+    }
+
+    fn logical(op: LogicalOp, left: Expr, right: Expr) -> Expr {
+        Expr::Logical {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
         }
     }
 
@@ -438,6 +490,49 @@ mod tests {
         assert_eq!(
             parse("(1 < 2) == true"),
             Ok(bin(Eq, bin(Lt, int(1), int(2)), Expr::Bool(true)))
+        );
+    }
+
+    #[test]
+    fn logical_not() {
+        assert_eq!(parse("!true"), Ok(not(Expr::Bool(true))));
+        assert_eq!(parse("!!x"), Ok(not(not(var("x")))));
+    }
+
+    #[test]
+    fn not_binds_tighter_than_comparison() {
+        assert_eq!(parse("!a == b"), Ok(bin(Eq, not(var("a")), var("b"))));
+    }
+
+    #[test]
+    fn and_binds_tighter_than_or() {
+        assert_eq!(
+            parse("a || b && c"),
+            Ok(logical(Or, var("a"), logical(And, var("b"), var("c"))))
+        );
+        assert_eq!(
+            parse("a && b || c"),
+            Ok(logical(Or, logical(And, var("a"), var("b")), var("c")))
+        );
+    }
+
+    #[test]
+    fn logical_operators_are_left_associative() {
+        assert_eq!(
+            parse("a || b || c"),
+            Ok(logical(Or, logical(Or, var("a"), var("b")), var("c")))
+        );
+    }
+
+    #[test]
+    fn comparison_binds_tighter_than_and() {
+        assert_eq!(
+            parse("1 < x && x < 3"),
+            Ok(logical(
+                And,
+                bin(Lt, int(1), var("x")),
+                bin(Lt, var("x"), int(3))
+            ))
         );
     }
 
@@ -708,6 +803,14 @@ mod tests {
         assert_eq!(
             parse("1 < 2 < 3"),
             Err(at(ParseErrorKind::Unexpected(Token::Lt), 1, 7))
+        );
+    }
+
+    #[test]
+    fn missing_right_operand_of_or() {
+        assert_eq!(
+            parse("true ||"),
+            Err(at(expected("expression", Token::Eof), 1, 8))
         );
     }
 }

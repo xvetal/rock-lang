@@ -18,6 +18,9 @@ pub enum Token {
     LtEq,
     Gt,
     GtEq,
+    Bang,
+    AndAnd,
+    OrOr,
     Semicolon,
     Comma,
     LParen,
@@ -44,6 +47,9 @@ impl fmt::Display for Token {
             Token::LtEq => write!(f, "<="),
             Token::Gt => write!(f, ">"),
             Token::GtEq => write!(f, ">="),
+            Token::Bang => write!(f, "!"),
+            Token::AndAnd => write!(f, "&&"),
+            Token::OrOr => write!(f, "||"),
             Token::Semicolon => write!(f, ";"),
             Token::Comma => write!(f, ","),
             Token::LParen => write!(f, "("),
@@ -100,6 +106,9 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
             '=' if eat(&mut chars, &mut pos, '=') => Token::EqEq,
             '=' => Token::Eq,
             '!' if eat(&mut chars, &mut pos, '=') => Token::NotEq,
+            '!' => Token::Bang,
+            '&' if eat(&mut chars, &mut pos, '&') => Token::AndAnd,
+            '|' if eat(&mut chars, &mut pos, '|') => Token::OrOr,
             '<' if eat(&mut chars, &mut pos, '=') => Token::LtEq,
             '<' => Token::Lt,
             '>' if eat(&mut chars, &mut pos, '=') => Token::GtEq,
@@ -342,9 +351,24 @@ mod tests {
     }
 
     #[test]
+    fn logical_tokens() {
+        assert_eq!(
+            tokens("! != && || !x"),
+            Ok(vec![
+                Token::Bang,
+                Token::NotEq,
+                Token::AndAnd,
+                Token::OrOr,
+                Token::Bang,
+                ident("x"),
+                Token::Eof
+            ])
+        );
+    }
+
+    #[test]
     fn display_round_trip() {
-        let source =
-            "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 == 6 != 7 < 8 <= 9 > 10 >= 11 ;";
+        let source = "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ;";
         let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens
             .iter()
@@ -396,10 +420,18 @@ mod tests {
     }
 
     #[test]
-    fn bang_without_eq() {
+    fn single_ampersand() {
         assert_eq!(
-            tokens("!true"),
-            Err("1:1: unexpected character: '!'".to_string())
+            tokens("a & b"),
+            Err("1:3: unexpected character: '&'".to_string())
+        );
+    }
+
+    #[test]
+    fn single_pipe() {
+        assert_eq!(
+            tokens("a | b"),
+            Err("1:3: unexpected character: '|'".to_string())
         );
     }
 }
