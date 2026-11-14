@@ -23,6 +23,8 @@ pub enum ParseErrorKind {
     IntegerTooLarge,
     NestedFn,
     ReturnOutsideFn,
+    BreakOutsideLoop,
+    ContinueOutsideLoop,
 }
 
 impl ParseErrorKind {
@@ -49,6 +51,8 @@ impl fmt::Display for ParseErrorKind {
                 write!(f, "functions can only be declared at the top level")
             }
             ParseErrorKind::ReturnOutsideFn => write!(f, "'return' outside of a function"),
+            ParseErrorKind::BreakOutsideLoop => write!(f, "'break' outside of a loop"),
+            ParseErrorKind::ContinueOutsideLoop => write!(f, "'continue' outside of a loop"),
         }
     }
 }
@@ -57,6 +61,7 @@ pub struct Parser {
     tokens: Vec<Located>,
     pos: usize,
     in_fn: bool,
+    in_loop: bool,
 }
 
 impl Parser {
@@ -65,6 +70,7 @@ impl Parser {
             tokens,
             pos: 0,
             in_fn: false,
+            in_loop: false,
         }
     }
 
@@ -299,6 +305,10 @@ impl Parser {
             Token::While => self.while_expr(pos),
             Token::Return if self.in_fn => self.return_expr(pos),
             Token::Return => Err(ParseErrorKind::ReturnOutsideFn.at(pos)),
+            Token::Break if self.in_loop => Ok(ExprKind::Break.at(pos)),
+            Token::Break => Err(ParseErrorKind::BreakOutsideLoop.at(pos)),
+            Token::Continue if self.in_loop => Ok(ExprKind::Continue.at(pos)),
+            Token::Continue => Err(ParseErrorKind::ContinueOutsideLoop.at(pos)),
             Token::LParen => {
                 let inner = self.expr()?;
                 self.expect(Token::RParen, "')'")?;
@@ -345,7 +355,10 @@ impl Parser {
     fn while_expr(&mut self, pos: Pos) -> Result<Expr, ParseError> {
         let cond = self.expr()?;
         self.expect(Token::LBrace, "'{'")?;
+        let outer = self.in_loop;
+        self.in_loop = true;
         let body = self.block()?;
+        self.in_loop = outer;
         Ok(ExprKind::While {
             cond: Box::new(cond),
             body,
@@ -449,7 +462,12 @@ mod tests {
     fn strip(expr: &mut Expr) {
         expr.pos = NO_POS;
         match &mut expr.kind {
-            ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Var(_) | ExprKind::Return(None) => {}
+            ExprKind::Int(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Var(_)
+            | ExprKind::Return(None)
+            | ExprKind::Break
+            | ExprKind::Continue => {}
             ExprKind::Call { args, .. } => args.iter_mut().for_each(strip),
             ExprKind::Binary { left, right, .. } | ExprKind::Logical { left, right, .. } => {
                 strip(left);
@@ -610,6 +628,14 @@ mod tests {
 
     fn ret(value: Option<Expr>) -> Expr {
         ExprKind::Return(value.map(Box::new)).at(NO_POS)
+    }
+
+    fn brk() -> Expr {
+        ExprKind::Break.at(NO_POS)
+    }
+
+    fn cont() -> Expr {
+        ExprKind::Continue.at(NO_POS)
     }
 
     #[test]
@@ -1037,6 +1063,41 @@ mod tests {
     }
 
     #[test]
+    fn break_and_continue() {
+        assert_eq!(
+            parse("while x { if y { break; } continue }"),
+            Ok(while_expr(
+                var("x"),
+                block(
+                    vec![Stmt::Expr(if_expr(
+                        var("y"),
+                        block(vec![Stmt::Expr(brk())], None),
+                        None
+                    ))],
+                    Some(cont())
+                )
+            ))
+        );
+    }
+
+    #[test]
+    fn break_in_nested_loop() {
+        assert_eq!(
+            parse("while x { while y { break; } break; }"),
+            Ok(while_expr(
+                var("x"),
+                block(
+                    vec![
+                        Stmt::Expr(while_expr(var("y"), block(vec![Stmt::Expr(brk())], None))),
+                        Stmt::Expr(brk())
+                    ],
+                    None
+                )
+            ))
+        );
+    }
+
+    #[test]
     fn infix_expressions_are_located_at_their_operator() {
         let expr = parse_located("a * (b +\n  c)");
         assert_eq!(expr.pos, Pos { line: 1, col: 3 });
@@ -1159,6 +1220,14 @@ mod tests {
         assert_eq!(
             ParseErrorKind::ReturnOutsideFn.to_string(),
             "'return' outside of a function"
+        );
+        assert_eq!(
+            ParseErrorKind::BreakOutsideLoop.to_string(),
+            "'break' outside of a loop"
+        );
+        assert_eq!(
+            ParseErrorKind::ContinueOutsideLoop.to_string(),
+            "'continue' outside of a loop"
         );
         assert_eq!(
             at(expected("expression", Token::Eof), 1, 4).to_string(),
@@ -1453,6 +1522,26 @@ mod tests {
         assert_eq!(
             parse_program("fn f() {} { return; }"),
             Err(at(ParseErrorKind::ReturnOutsideFn, 1, 13))
+        );
+    }
+
+    #[test]
+    fn break_outside_loop() {
+        assert_eq!(
+            parse_program("break;"),
+            Err(at(ParseErrorKind::BreakOutsideLoop, 1, 1))
+        );
+        assert_eq!(
+            parse_program("while x {} { continue; }"),
+            Err(at(ParseErrorKind::ContinueOutsideLoop, 1, 14))
+        );
+    }
+
+    #[test]
+    fn break_in_function_outside_loop() {
+        assert_eq!(
+            parse_program("fn f() { break; }"),
+            Err(at(ParseErrorKind::BreakOutsideLoop, 1, 10))
         );
     }
 }

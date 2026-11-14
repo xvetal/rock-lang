@@ -73,6 +73,8 @@ impl fmt::Display for RuntimeErrorKind {
 
 enum Unwind {
     Return(Value),
+    Break,
+    Continue,
     Error(RuntimeError),
 }
 
@@ -106,6 +108,9 @@ impl<W: Write> Interpreter<W> {
             .map_err(|unwind| match unwind {
                 Unwind::Error(error) => error,
                 Unwind::Return(_) => unreachable!("the parser rejects 'return' outside functions"),
+                Unwind::Break | Unwind::Continue => {
+                    unreachable!("the parser rejects 'break' and 'continue' outside loops")
+                }
             })
     }
 
@@ -212,7 +217,11 @@ impl<W: Write> Interpreter<W> {
             }
             ExprKind::While { cond, body } => {
                 while self.condition(cond)? {
-                    self.block(body)?;
+                    match self.block(body) {
+                        Ok(_) | Err(Unwind::Continue) => {}
+                        Err(Unwind::Break) => break,
+                        Err(other) => return Err(other),
+                    }
                 }
                 Ok(Value::Unit)
             }
@@ -223,6 +232,8 @@ impl<W: Write> Interpreter<W> {
                 };
                 Err(Unwind::Return(value))
             }
+            ExprKind::Break => Err(Unwind::Break),
+            ExprKind::Continue => Err(Unwind::Continue),
         }
     }
 
@@ -625,6 +636,38 @@ mod tests {
     fn while_body_scope_is_fresh_each_iteration() {
         let program = "let i = 0; while i < 3 { let x = i; i = i + 1; print(x); }";
         assert_eq!(output(program), Ok("0\n1\n2\n".to_string()));
+    }
+
+    #[test]
+    fn break_exits_loop() {
+        let program = "let i = 0; while true { if i == 3 { break; } i = i + 1; } i";
+        assert_eq!(run(program), Ok(3));
+    }
+
+    #[test]
+    fn continue_skips_rest_of_body() {
+        let program =
+            "let i = 0; while i < 5 { i = i + 1; if i == 2 || i == 4 { continue; } print(i); }";
+        assert_eq!(output(program), Ok("1\n3\n5\n".to_string()));
+    }
+
+    #[test]
+    fn break_only_leaves_innermost_loop() {
+        let program = "let i = 0; while i < 2 { i = i + 1; while true { print(i); break; } }";
+        assert_eq!(output(program), Ok("1\n2\n".to_string()));
+    }
+
+    #[test]
+    fn loop_with_break_is_unit() {
+        assert_eq!(value("while true { break; }"), Ok(Value::Unit));
+    }
+
+    #[test]
+    fn scopes_restored_after_break() {
+        assert_eq!(
+            value("while true { let x = 1; { break; } } x"),
+            Err(undefined("x"))
+        );
     }
 
     #[test]

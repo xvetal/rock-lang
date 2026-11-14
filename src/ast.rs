@@ -68,6 +68,8 @@ pub enum ExprKind {
         body: Block,
     },
     Return(Option<Box<Expr>>),
+    Break,
+    Continue,
 }
 
 impl ExprKind {

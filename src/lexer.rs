@@ -12,6 +12,8 @@ pub enum Token {
     While,
     Fn,
     Return,
+    Break,
+    Continue,
     Plus,
     Minus,
     Star,
@@ -48,6 +50,8 @@ impl fmt::Display for Token {
             Token::While => write!(f, "while"),
             Token::Fn => write!(f, "fn"),
             Token::Return => write!(f, "return"),
+            Token::Break => write!(f, "break"),
+            Token::Continue => write!(f, "continue"),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
@@ -165,6 +169,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
                     "while" => Token::While,
                     "fn" => Token::Fn,
                     "return" => Token::Return,
+                    "break" => Token::Break,
+                    "continue" => Token::Continue,
                     _ => Token::Ident(name),
                 }
             }
@@ -330,6 +336,14 @@ mod tests {
     }
 
     #[test]
+    fn loop_control_keywords() {
+        assert_eq!(
+            tokens("break continue"),
+            Ok(vec![Token::Break, Token::Continue, Token::Eof])
+        );
+    }
+
+    #[test]
     fn keyword_prefix_is_identifier() {
         assert_eq!(tokens("letter"), Ok(vec![ident("letter"), Token::Eof]));
     }
@@ -417,7 +431,10 @@ mod tests {
 
     #[test]
     fn display_round_trip() {
-        let source = "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; { } if x { } else { } while x { } fn f ( ) { return }";
+        let source = "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 \
+                      == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; \
+                      { } if x { } else { } while x { break ; continue } \
+                      fn f ( ) { return }";
         let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens
             .iter()

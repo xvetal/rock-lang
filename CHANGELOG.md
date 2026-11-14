@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- `break;` and `continue;` inside `while` loops; outside a loop they are a parse error
+
 ### Changed
 - Runtime errors report the line and column of the failing expression, e.g. `error: 1:4: expected bool, got 1`
 
