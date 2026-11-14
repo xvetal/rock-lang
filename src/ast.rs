@@ -59,6 +59,7 @@ pub enum Expr {
         cond: Box<Expr>,
         body: Block,
     },
+    Return(Option<Box<Expr>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

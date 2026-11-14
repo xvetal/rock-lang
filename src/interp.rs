@@ -48,6 +48,17 @@ impl fmt::Display for RuntimeError {
     }
 }
 
+enum Unwind {
+    Return(Value),
+    Error(RuntimeError),
+}
+
+impl From<RuntimeError> for Unwind {
+    fn from(error: RuntimeError) -> Self {
+        Unwind::Error(error)
+    }
+}
+
 pub struct Interpreter<W: Write> {
     scopes: Vec<HashMap<String, Value>>,
     out: W,
@@ -63,16 +74,20 @@ impl<W: Write> Interpreter<W> {
 
     pub fn run(&mut self, program: &Program) -> Result<Value, RuntimeError> {
         self.sequence(&program.stmts, program.expr.as_ref())
+            .map_err(|unwind| match unwind {
+                Unwind::Error(error) => error,
+                Unwind::Return(_) => unreachable!("the parser rejects 'return' outside functions"),
+            })
     }
 
-    fn block(&mut self, block: &Block) -> Result<Value, RuntimeError> {
+    fn block(&mut self, block: &Block) -> Result<Value, Unwind> {
         self.scopes.push(HashMap::new());
         let result = self.sequence(&block.stmts, block.expr.as_deref());
         self.scopes.pop();
         result
     }
 
-    fn sequence(&mut self, stmts: &[Stmt], expr: Option<&Expr>) -> Result<Value, RuntimeError> {
+    fn sequence(&mut self, stmts: &[Stmt], expr: Option<&Expr>) -> Result<Value, Unwind> {
         for stmt in stmts {
             match stmt {
                 Stmt::Let { name, value } => {
@@ -122,11 +137,11 @@ impl<W: Write> Interpreter<W> {
             .ok_or_else(|| RuntimeError::UndefinedVariable(name.to_string()))
     }
 
-    fn eval(&mut self, expr: &Expr) -> Result<Value, RuntimeError> {
+    fn eval(&mut self, expr: &Expr) -> Result<Value, Unwind> {
         match expr {
             Expr::Int(n) => Ok(Value::Int(*n)),
             Expr::Bool(b) => Ok(Value::Bool(*b)),
-            Expr::Var(name) => self.lookup(name),
+            Expr::Var(name) => Ok(self.lookup(name)?),
             Expr::Call { name, args } => {
                 let args = args
                     .iter()
@@ -137,12 +152,12 @@ impl<W: Write> Interpreter<W> {
             Expr::Binary { op, left, right } => {
                 let l = self.eval(left)?;
                 let r = self.eval(right)?;
-                binary(op, l, r)
+                Ok(binary(op, l, r)?)
             }
             Expr::Unary { op, operand } => {
                 let value = self.eval(operand)?;
                 match op {
-                    UnaryOp::Neg => checked(int(value)?.checked_neg()),
+                    UnaryOp::Neg => Ok(checked(int(value)?.checked_neg())?),
                     UnaryOp::Not => Ok(Value::Bool(!boolean(value)?)),
                 }
             }
@@ -174,38 +189,48 @@ impl<W: Write> Interpreter<W> {
                 }
                 Ok(Value::Unit)
             }
+            Expr::Return(value) => {
+                let value = match value {
+                    Some(value) => self.eval(value)?,
+                    None => Value::Unit,
+                };
+                Err(Unwind::Return(value))
+            }
         }
     }
 
-    fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, Unwind> {
         match self.lookup(name) {
             Ok(Value::Function(decl)) => self.call_function(&decl, args),
             Ok(found) => Err(RuntimeError::TypeMismatch {
                 expected: "function",
                 found,
-            }),
+            }
+            .into()),
             Err(_) if name == "print" => {
                 let [value] = args.as_slice() else {
                     return Err(RuntimeError::ArgumentCount {
                         name: name.to_string(),
                         expected: 1,
                         found: args.len(),
-                    });
+                    }
+                    .into());
                 };
                 writeln!(self.out, "{value}").map_err(|e| RuntimeError::Output(e.kind()))?;
                 Ok(Value::Unit)
             }
-            _ => Err(RuntimeError::UndefinedFunction(name.to_string())),
+            _ => Err(RuntimeError::UndefinedFunction(name.to_string()).into()),
         }
     }
 
-    fn call_function(&mut self, decl: &FnDecl, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    fn call_function(&mut self, decl: &FnDecl, args: Vec<Value>) -> Result<Value, Unwind> {
         if args.len() != decl.params.len() {
             return Err(RuntimeError::ArgumentCount {
                 name: decl.name.clone(),
                 expected: decl.params.len(),
                 found: args.len(),
-            });
+            }
+            .into());
         }
         let params = decl.params.iter().cloned().zip(args).collect();
         let caller_scopes = self.scopes.split_off(1);
@@ -213,7 +238,10 @@ impl<W: Write> Interpreter<W> {
         let result = self.sequence(&decl.body.stmts, decl.body.expr.as_deref());
         self.scopes.truncate(1);
         self.scopes.extend(caller_scopes);
-        result
+        match result {
+            Err(Unwind::Return(value)) => Ok(value),
+            other => other,
+        }
     }
 }
 
@@ -602,6 +630,54 @@ mod tests {
     #[test]
     fn caller_scopes_restored_after_call() {
         assert_eq!(run("fn f() { 1 } { let y = 2; f() + y }"), Ok(3));
+    }
+
+    #[test]
+    fn early_return() {
+        assert_eq!(
+            run("fn abs(x) { if x < 0 { return -x; } x } abs(-5) + abs(3)"),
+            Ok(8)
+        );
+    }
+
+    #[test]
+    fn return_without_semicolon() {
+        assert_eq!(
+            run("fn sign(x) { if x < 0 { return -1 } 1 } sign(-3)"),
+            Ok(-1)
+        );
+    }
+
+    #[test]
+    fn return_from_loop() {
+        let program = "fn root(n) { let i = 0; while true { if i * i >= n { return i; } i = i + 1; } } root(50)";
+        assert_eq!(run(program), Ok(8));
+    }
+
+    #[test]
+    fn return_skips_rest_of_body() {
+        assert_eq!(
+            output("fn f() { print(1); return; print(2); } f();"),
+            Ok("1\n".to_string())
+        );
+    }
+
+    #[test]
+    fn bare_return_is_unit() {
+        assert_eq!(value("fn f() { return; 1 } f()"), Ok(Value::Unit));
+    }
+
+    #[test]
+    fn return_only_leaves_innermost_function() {
+        assert_eq!(run("fn g() { return 1; } fn f() { g() + 1 } f()"), Ok(2));
+    }
+
+    #[test]
+    fn scopes_restored_after_return() {
+        assert_eq!(
+            run("fn f() { { { return 1; } } } { let y = 2; f() + y }"),
+            Ok(3)
+        );
     }
 
     #[test]

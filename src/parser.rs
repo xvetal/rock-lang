@@ -22,6 +22,7 @@ pub enum ParseErrorKind {
     Unexpected(Token),
     IntegerTooLarge,
     NestedFn,
+    ReturnOutsideFn,
 }
 
 impl ParseErrorKind {
@@ -47,6 +48,7 @@ impl fmt::Display for ParseErrorKind {
             ParseErrorKind::NestedFn => {
                 write!(f, "functions can only be declared at the top level")
             }
+            ParseErrorKind::ReturnOutsideFn => write!(f, "'return' outside of a function"),
         }
     }
 }
@@ -54,11 +56,16 @@ impl fmt::Display for ParseErrorKind {
 pub struct Parser {
     tokens: Vec<Located>,
     pos: usize,
+    in_fn: bool,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Located>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            in_fn: false,
+        }
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
@@ -122,7 +129,9 @@ impl Parser {
         self.expect(Token::LParen, "'('")?;
         let params = self.list(|p| p.ident("parameter name"))?;
         self.expect(Token::LBrace, "'{'")?;
+        self.in_fn = true;
         let body = self.block()?;
+        self.in_fn = false;
         Ok(Stmt::Fn(Rc::new(FnDecl { name, params, body })))
     }
 
@@ -272,6 +281,8 @@ impl Parser {
             Token::LBrace => Ok(Expr::Block(self.block()?)),
             Token::If => self.if_expr(),
             Token::While => self.while_expr(),
+            Token::Return if self.in_fn => self.return_expr(),
+            Token::Return => Err(ParseErrorKind::ReturnOutsideFn.at(pos)),
             Token::LParen => {
                 let inner = self.expr()?;
                 self.expect(Token::RParen, "')'")?;
@@ -322,6 +333,14 @@ impl Parser {
             cond: Box::new(cond),
             body,
         })
+    }
+
+    fn return_expr(&mut self) -> Result<Expr, ParseError> {
+        let value = match self.peek() {
+            Token::Semicolon | Token::RBrace | Token::Eof => None,
+            _ => Some(Box::new(self.expr()?)),
+        };
+        Ok(Expr::Return(value))
     }
 
     fn list<T>(
@@ -501,6 +520,10 @@ mod tests {
             cond: Box::new(cond),
             body,
         }
+    }
+
+    fn ret(value: Option<Expr>) -> Expr {
+        Expr::Return(value.map(Box::new))
     }
 
     #[test]
@@ -886,6 +909,47 @@ mod tests {
     }
 
     #[test]
+    fn return_statement() {
+        assert_eq!(
+            parse_program("fn f() { return 1; }"),
+            Ok(Program {
+                stmts: vec![fn_decl(
+                    "f",
+                    &[],
+                    block(vec![Stmt::Expr(ret(Some(int(1))))], None)
+                )],
+                expr: None
+            })
+        );
+    }
+
+    #[test]
+    fn return_without_value() {
+        assert_eq!(
+            parse_program("fn f() { return }"),
+            Ok(Program {
+                stmts: vec![fn_decl("f", &[], block(vec![], Some(ret(None))))],
+                expr: None
+            })
+        );
+    }
+
+    #[test]
+    fn return_takes_whole_expression() {
+        assert_eq!(
+            parse_program("fn f() { return 1 + 2; }"),
+            Ok(Program {
+                stmts: vec![fn_decl(
+                    "f",
+                    &[],
+                    block(vec![Stmt::Expr(ret(Some(bin(Add, int(1), int(2)))))], None)
+                )],
+                expr: None
+            })
+        );
+    }
+
+    #[test]
     fn empty_program() {
         assert_eq!(
             parse_program(""),
@@ -965,6 +1029,10 @@ mod tests {
         assert_eq!(
             ParseErrorKind::NestedFn.to_string(),
             "functions can only be declared at the top level"
+        );
+        assert_eq!(
+            ParseErrorKind::ReturnOutsideFn.to_string(),
+            "'return' outside of a function"
         );
         assert_eq!(
             at(expected("expression", Token::Eof), 1, 4).to_string(),
@@ -1243,6 +1311,22 @@ mod tests {
         assert_eq!(
             parse_program("fn f() 1"),
             Err(at(expected("'{'", Token::Int(1)), 1, 8))
+        );
+    }
+
+    #[test]
+    fn return_outside_function() {
+        assert_eq!(
+            parse_program("return 1"),
+            Err(at(ParseErrorKind::ReturnOutsideFn, 1, 1))
+        );
+    }
+
+    #[test]
+    fn return_in_top_level_block() {
+        assert_eq!(
+            parse_program("fn f() {} { return; }"),
+            Err(at(ParseErrorKind::ReturnOutsideFn, 1, 13))
         );
     }
 }

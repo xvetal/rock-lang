@@ -5,6 +5,7 @@
 ### Added
 - Functions: `fn name(a, b) { ... }` at the top level; the body sees its parameters and global variables, and its last expression is the result
 - Functions are values: `let f = add; f(1, 2)` calls `add`; `print(add)` prints `<fn add>`
+- `return value;` and `return;` exit the enclosing function early; `return` outside a function is a parse error
 
 ## [0.4.0] - 2026-11-14
 
