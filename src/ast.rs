@@ -47,6 +47,13 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    Block(Block),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Block {
+    pub stmts: Vec<Stmt>,
+    pub expr: Option<Box<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

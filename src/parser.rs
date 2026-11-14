@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::ast::{BinaryOp, Expr, LogicalOp, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Block, Expr, LogicalOp, Program, Stmt, UnaryOp};
 use crate::lexer::{Located, Pos, Token};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,28 +57,43 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
+        let (stmts, expr) = self.sequence()?;
+        if self.peek() != &Token::Eof {
+            return Err(ParseErrorKind::Unexpected(self.peek().clone()).at(self.peek_pos()));
+        }
+        Ok(Program { stmts, expr })
+    }
+
+    fn block(&mut self) -> Result<Block, ParseError> {
+        let (stmts, expr) = self.sequence()?;
+        self.expect(Token::RBrace, "'}'")?;
+        Ok(Block {
+            stmts,
+            expr: expr.map(Box::new),
+        })
+    }
+
+    fn sequence(&mut self) -> Result<(Vec<Stmt>, Option<Expr>), ParseError> {
         let mut stmts = Vec::new();
-        let mut expr = None;
         loop {
             match self.peek() {
-                Token::Eof => break,
+                Token::Eof | Token::RBrace => return Ok((stmts, None)),
                 Token::Let => stmts.push(self.let_stmt()?),
                 _ => {
                     let value = self.expr()?;
                     if self.peek() == &Token::Semicolon {
                         self.advance();
                         stmts.push(Stmt::Expr(value));
+                    } else if matches!(value, Expr::Block(_))
+                        && !matches!(self.peek(), Token::Eof | Token::RBrace)
+                    {
+                        stmts.push(Stmt::Expr(value));
                     } else {
-                        expr = Some(value);
-                        break;
+                        return Ok((stmts, Some(value)));
                     }
                 }
             }
         }
-        if self.peek() != &Token::Eof {
-            return Err(ParseErrorKind::Unexpected(self.peek().clone()).at(self.peek_pos()));
-        }
-        Ok(Program { stmts, expr })
     }
 
     fn let_stmt(&mut self) -> Result<Stmt, ParseError> {
@@ -235,6 +250,7 @@ impl Parser {
                     Ok(Expr::Var(name))
                 }
             }
+            Token::LBrace => Ok(Expr::Block(self.block()?)),
             Token::LParen => {
                 let inner = self.expr()?;
                 self.expect(Token::RParen, "')'")?;
@@ -370,6 +386,13 @@ mod tests {
             left: Box::new(left),
             right: Box::new(right),
         }
+    }
+
+    fn block(stmts: Vec<Stmt>, expr: Option<Expr>) -> Expr {
+        Expr::Block(Block {
+            stmts,
+            expr: expr.map(Box::new),
+        })
     }
 
     #[test]
@@ -571,6 +594,52 @@ mod tests {
                 int(1),
                 bin(Mul, call("f", vec![call("g", vec![int(2)])]), int(3))
             ))
+        );
+    }
+
+    #[test]
+    fn block_expression() {
+        assert_eq!(
+            parse("{ let x = 1; x + 1 }"),
+            Ok(block(
+                vec![let_stmt("x", int(1))],
+                Some(bin(Add, var("x"), int(1)))
+            ))
+        );
+    }
+
+    #[test]
+    fn empty_block() {
+        assert_eq!(parse("{}"), Ok(block(vec![], None)));
+    }
+
+    #[test]
+    fn block_in_expression() {
+        assert_eq!(
+            parse("1 + { 2 }"),
+            Ok(bin(Add, int(1), block(vec![], Some(int(2)))))
+        );
+    }
+
+    #[test]
+    fn nested_blocks() {
+        assert_eq!(
+            parse("{ { 1 } }"),
+            Ok(block(vec![], Some(block(vec![], Some(int(1))))))
+        );
+    }
+
+    #[test]
+    fn block_statement_without_semicolon() {
+        assert_eq!(
+            parse_program("{ print(1); } 2"),
+            Ok(Program {
+                stmts: vec![Stmt::Expr(block(
+                    vec![Stmt::Expr(call("print", vec![int(1)]))],
+                    None
+                ))],
+                expr: Some(int(2))
+            })
         );
     }
 
@@ -811,6 +880,27 @@ mod tests {
         assert_eq!(
             parse("true ||"),
             Err(at(expected("expression", Token::Eof), 1, 8))
+        );
+    }
+
+    #[test]
+    fn unclosed_block() {
+        assert_eq!(parse("{ 1"), Err(at(expected("'}'", Token::Eof), 1, 4)));
+    }
+
+    #[test]
+    fn block_with_two_expressions() {
+        assert_eq!(
+            parse("{ 1 2 }"),
+            Err(at(expected("'}'", Token::Int(2)), 1, 5))
+        );
+    }
+
+    #[test]
+    fn stray_closing_brace() {
+        assert_eq!(
+            parse_program("1; }"),
+            Err(at(ParseErrorKind::Unexpected(Token::RBrace), 1, 4))
         );
     }
 }

@@ -1,49 +1,72 @@
 use std::collections::HashMap;
 use std::io::Write;
 
-use crate::ast::{BinaryOp, Expr, LogicalOp, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Block, Expr, LogicalOp, Program, Stmt, UnaryOp};
 use crate::value::Value;
 
 pub struct Interpreter<W: Write> {
-    vars: HashMap<String, Value>,
+    scopes: Vec<HashMap<String, Value>>,
     out: W,
 }
 
 impl<W: Write> Interpreter<W> {
     pub fn new(out: W) -> Self {
         Self {
-            vars: HashMap::new(),
+            scopes: vec![HashMap::new()],
             out,
         }
     }
 
     pub fn run(&mut self, program: &Program) -> Result<Value, String> {
-        for stmt in &program.stmts {
+        self.sequence(&program.stmts, program.expr.as_ref())
+    }
+
+    fn block(&mut self, block: &Block) -> Result<Value, String> {
+        self.scopes.push(HashMap::new());
+        let result = self.sequence(&block.stmts, block.expr.as_deref());
+        self.scopes.pop();
+        result
+    }
+
+    fn sequence(&mut self, stmts: &[Stmt], expr: Option<&Expr>) -> Result<Value, String> {
+        for stmt in stmts {
             match stmt {
                 Stmt::Let { name, value } => {
                     let value = self.eval(value)?;
-                    self.vars.insert(name.clone(), value);
+                    self.define(name, value);
                 }
                 Stmt::Expr(expr) => {
                     self.eval(expr)?;
                 }
             }
         }
-        match &program.expr {
+        match expr {
             Some(expr) => self.eval(expr),
             None => Ok(Value::Unit),
         }
+    }
+
+    fn define(&mut self, name: &str, value: Value) {
+        self.scopes
+            .last_mut()
+            .expect("global scope is never popped")
+            .insert(name.to_string(), value);
+    }
+
+    fn lookup(&self, name: &str) -> Result<Value, String> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .copied()
+            .ok_or_else(|| format!("undefined variable: {name}"))
     }
 
     fn eval(&mut self, expr: &Expr) -> Result<Value, String> {
         match expr {
             Expr::Int(n) => Ok(Value::Int(*n)),
             Expr::Bool(b) => Ok(Value::Bool(*b)),
-            Expr::Var(name) => self
-                .vars
-                .get(name)
-                .copied()
-                .ok_or_else(|| format!("undefined variable: {name}")),
+            Expr::Var(name) => self.lookup(name),
             Expr::Call { name, args } => {
                 let args = args
                     .iter()
@@ -71,6 +94,7 @@ impl<W: Write> Interpreter<W> {
                     _ => Ok(Value::Bool(boolean(self.eval(right)?)?)),
                 }
             }
+            Expr::Block(block) => self.block(block),
         }
     }
 
@@ -289,6 +313,28 @@ mod tests {
     }
 
     #[test]
+    fn block_value() {
+        assert_eq!(run("{ let x = 2; x * 3 }"), Ok(6));
+    }
+
+    #[test]
+    fn empty_block_is_unit() {
+        assert_eq!(value("{}"), Ok(Value::Unit));
+        assert_eq!(value("{ 1; }"), Ok(Value::Unit));
+    }
+
+    #[test]
+    fn block_sees_outer_variables() {
+        assert_eq!(run("let x = 1; { x + 1 }"), Ok(2));
+    }
+
+    #[test]
+    fn shadowing_in_block_ends_with_block() {
+        assert_eq!(run("let x = 1; { let x = 2; } x"), Ok(1));
+        assert_eq!(run("let x = 1; let y = { let x = 2; x }; x + y"), Ok(3));
+    }
+
+    #[test]
     fn let_bindings() {
         assert_eq!(run("let x = 1 + 2; let y = x * 3; y - 1"), Ok(8));
     }
@@ -360,6 +406,25 @@ mod tests {
             run("let y = x; let x = 1; y"),
             Err("undefined variable: x".to_string())
         );
+    }
+
+    #[test]
+    fn block_variable_not_visible_outside() {
+        assert_eq!(
+            run("{ let y = 1; } y"),
+            Err("undefined variable: y".to_string())
+        );
+    }
+
+    #[test]
+    fn scope_is_popped_after_error() {
+        let mut interp = Interpreter::new(Vec::new());
+        assert_eq!(exec(&mut interp, "let x = 1;"), Ok(Value::Unit));
+        assert_eq!(
+            exec(&mut interp, "{ let x = 2; 1 / 0 }"),
+            Err("division by zero".to_string())
+        );
+        assert_eq!(exec(&mut interp, "x"), Ok(Value::Int(1)));
     }
 
     #[test]

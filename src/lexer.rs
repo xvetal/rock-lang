@@ -25,6 +25,8 @@ pub enum Token {
     Comma,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
     Eof,
 }
 
@@ -54,6 +56,8 @@ impl fmt::Display for Token {
             Token::Comma => write!(f, ","),
             Token::LParen => write!(f, "("),
             Token::RParen => write!(f, ")"),
+            Token::LBrace => write!(f, "{{"),
+            Token::RBrace => write!(f, "}}"),
             Token::Eof => write!(f, "end of input"),
         }
     }
@@ -117,6 +121,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
             ',' => Token::Comma,
             '(' => Token::LParen,
             ')' => Token::RParen,
+            '{' => Token::LBrace,
+            '}' => Token::RBrace,
             '0'..='9' => {
                 let mut value = u64::from(c.to_digit(10).expect("c is an ASCII digit"));
                 while let Some(&d) = chars.peek() {
@@ -184,7 +190,7 @@ mod tests {
     #[test]
     fn single_char_tokens() {
         assert_eq!(
-            tokens("+-*/()"),
+            tokens("+-*/(){}"),
             Ok(vec![
                 Token::Plus,
                 Token::Minus,
@@ -192,6 +198,8 @@ mod tests {
                 Token::Slash,
                 Token::LParen,
                 Token::RParen,
+                Token::LBrace,
+                Token::RBrace,
                 Token::Eof
             ])
         );
@@ -368,7 +376,7 @@ mod tests {
 
     #[test]
     fn display_round_trip() {
-        let source = "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ;";
+        let source = "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; { }";
         let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens
             .iter()
