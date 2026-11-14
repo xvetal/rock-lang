@@ -138,11 +138,12 @@ impl Parser {
     }
 
     fn assign_stmt(&mut self, name: String) -> Result<Stmt, ParseError> {
+        let pos = self.peek_pos();
         self.advance();
         self.advance();
         let value = self.expr()?;
         self.expect(Token::Semicolon, "';'")?;
-        Ok(Stmt::Assign { name, value })
+        Ok(Stmt::Assign { name, value, pos })
     }
 
     fn expr(&mut self) -> Result<Expr, ParseError> {
@@ -479,8 +480,10 @@ mod tests {
 
     fn strip_stmt(stmt: &mut Stmt) {
         match stmt {
-            Stmt::Let { value, .. } | Stmt::Assign { value, .. } | Stmt::Expr(value) => {
-                strip(value)
+            Stmt::Let { value, .. } | Stmt::Expr(value) => strip(value),
+            Stmt::Assign { value, pos, .. } => {
+                *pos = NO_POS;
+                strip(value);
             }
             Stmt::Fn(decl) => {
                 let decl = Rc::get_mut(decl).expect("a freshly parsed declaration is not shared");
@@ -931,7 +934,8 @@ mod tests {
             Ok(Program {
                 stmts: vec![Stmt::Assign {
                     name: "x".to_string(),
-                    value: bin(Add, var("x"), int(1))
+                    value: bin(Add, var("x"), int(1)),
+                    pos: NO_POS
                 }],
                 expr: None
             })

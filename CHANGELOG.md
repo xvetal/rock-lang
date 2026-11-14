@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Runtime errors report the line and column of the failing expression, e.g. `error: 1:4: expected bool, got 1`
+
 ## [0.5.0] - 2026-11-14
 
 ### Added
