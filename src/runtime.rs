@@ -134,3 +134,54 @@ fn checked(result: Option<i64>) -> Result<Value, RuntimeErrorKind> {
         .map(Value::Int)
         .ok_or(RuntimeErrorKind::IntegerOverflow)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_messages() {
+        let messages = [
+            (
+                RuntimeErrorKind::ArgumentCount {
+                    name: "f".to_string(),
+                    expected: 1,
+                    found: 2,
+                },
+                "f expects 1 argument, got 2",
+            ),
+            (
+                RuntimeErrorKind::ArgumentCount {
+                    name: "add".to_string(),
+                    expected: 2,
+                    found: 1,
+                },
+                "add expects 2 arguments, got 1",
+            ),
+            (
+                RuntimeErrorKind::TypeMismatch {
+                    expected: "bool",
+                    found: Value::Unit,
+                },
+                "expected bool, got ()",
+            ),
+            (
+                RuntimeErrorKind::CannotCompare(Value::Int(1), Value::Bool(true)),
+                "cannot compare 1 with true",
+            ),
+            (RuntimeErrorKind::DivisionByZero, "division by zero"),
+            (RuntimeErrorKind::IntegerOverflow, "integer overflow"),
+            (
+                RuntimeErrorKind::StackOverflow,
+                "stack overflow: more than 1000 nested calls",
+            ),
+            (
+                RuntimeErrorKind::Output(io::ErrorKind::BrokenPipe),
+                "cannot write output: broken pipe",
+            ),
+        ];
+        for (kind, message) in messages {
+            assert_eq!(kind.to_string(), message);
+        }
+    }
+}

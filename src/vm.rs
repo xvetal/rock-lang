@@ -214,6 +214,9 @@ mod tests {
         assert_eq!(agree("-(4 - 10) / 2"), Ok(Value::Int(3)));
         assert_eq!(agree("10 - 3 - 2"), Ok(Value::Int(5)));
         assert_eq!(agree("-9223372036854775808"), Ok(Value::Int(i64::MIN)));
+        assert_eq!(agree("-9223372036854775807 - 1"), Ok(Value::Int(i64::MIN)));
+        assert_eq!(agree("7 / 2"), Ok(Value::Int(3)));
+        assert_eq!(agree("--5"), Ok(Value::Int(5)));
     }
 
     #[test]
@@ -221,6 +224,10 @@ mod tests {
         assert_eq!(agree("1 + 1 == 2"), Ok(Value::Bool(true)));
         assert_eq!(agree("3 <= 2"), Ok(Value::Bool(false)));
         assert_eq!(agree("true != false"), Ok(Value::Bool(true)));
+        assert_eq!(agree("1 < 2"), Ok(Value::Bool(true)));
+        assert_eq!(agree("1 > 2"), Ok(Value::Bool(false)));
+        assert_eq!(agree("2 >= 2"), Ok(Value::Bool(true)));
+        assert_eq!(agree("print(1) == print(2)"), Ok(Value::Bool(true)));
     }
 
     #[test]
@@ -255,6 +262,8 @@ mod tests {
             Ok(Value::Int(3))
         );
         assert_eq!(agree("if false { 1 }"), Ok(Value::Unit));
+        assert_eq!(agree("if false { 1 / 0 } else { 2 }"), Ok(Value::Int(2)));
+        assert_eq!(output("if true { print(1); } else { print(2); }"), "1\n");
     }
 
     #[test]
@@ -289,6 +298,14 @@ mod tests {
         assert_eq!(
             agree("let x = 1; { let y = 2; x = x + y; } x"),
             Ok(Value::Int(3))
+        );
+        assert_eq!(
+            agree("let x = 1; let y = { let x = 2; x }; x + y"),
+            Ok(Value::Int(3))
+        );
+        assert_eq!(
+            agree("let x = 1; if true { let x = 2; } x"),
+            Ok(Value::Int(1))
         );
     }
 
@@ -339,6 +356,7 @@ mod tests {
             ),
             Ok(Value::Int(12))
         );
+        assert_eq!(agree("while true { break; }"), Ok(Value::Unit));
     }
 
     #[test]
@@ -386,6 +404,23 @@ mod tests {
             agree("fn f(x) { let y = x * 2; y + 1 } let a = 1; f(5) + a"),
             Ok(Value::Int(12))
         );
+        assert_eq!(agree("fn f() {}"), Ok(Value::Unit));
+        assert_eq!(
+            agree("fn f() { 1 } { let y = 2; f() + y }"),
+            Ok(Value::Int(3))
+        );
+    }
+
+    #[test]
+    fn parameters_and_locals_are_separate_from_outer_variables() {
+        assert_eq!(
+            agree("let x = 1; fn f(x) { x } f(2) + x"),
+            Ok(Value::Int(3))
+        );
+        assert_eq!(
+            agree("let x = 1; fn f() { let x = 2; x } f() + x"),
+            Ok(Value::Int(3))
+        );
     }
 
     #[test]
@@ -418,6 +453,15 @@ mod tests {
             Ok(Value::Int(8))
         );
         assert_eq!(agree("fn f() { return; 1 } f()"), Ok(Value::Unit));
+        assert_eq!(
+            agree("fn sign(x) { if x < 0 { return -1 } 1 } sign(-3)"),
+            Ok(Value::Int(-1))
+        );
+        assert_eq!(
+            agree("fn g() { return 1; } fn f() { g() + 1 } f()"),
+            Ok(Value::Int(2))
+        );
+        assert_eq!(output("fn f() { print(1); return; print(2); } f();"), "1\n");
     }
 
     #[test]
@@ -429,6 +473,10 @@ mod tests {
         assert_eq!(
             agree("fn f() { let a = 1; { let b = 2; return a + b; } } let x = 5; f() + x"),
             Ok(Value::Int(8))
+        );
+        assert_eq!(
+            agree("fn f() { { { return 1; } } } { let y = 2; f() + y }"),
+            Ok(Value::Int(3))
         );
     }
 
@@ -442,10 +490,7 @@ mod tests {
             agree("fn twice(f, x) { f(f(x)) } fn inc(x) { x + 1 } twice(inc, 5)"),
             Ok(Value::Int(7))
         );
-        assert_eq!(
-            vm("fn add(a, b) { a + b } add").unwrap().to_string(),
-            "<fn add>"
-        );
+        assert_eq!(output("fn add(a, b) { a + b } print(add);"), "<fn add>\n");
     }
 
     #[test]
@@ -525,6 +570,30 @@ mod tests {
         assert_eq!(error("if 1 { 2 }"), "1:4: expected bool, got 1");
         assert_eq!(error("{ 1 / 0; 2 }"), "1:5: division by zero");
         assert_eq!(error("while 1 { 2 }"), "1:7: expected bool, got 1");
+        assert_eq!(error("print(1) + 1"), "1:10: expected integer, got ()");
+        assert_eq!(error("-false"), "1:1: expected integer, got false");
+        assert_eq!(error("false < true"), "1:7: expected integer, got false");
+        assert_eq!(error("true && print(1)"), "1:6: expected bool, got ()");
+        // The engines represent functions differently, so compare on the VM only.
+        assert_eq!(
+            vm("fn f() {} f == f").unwrap_err().to_string(),
+            "1:13: cannot compare <fn f> with <fn f>"
+        );
+    }
+
+    #[test]
+    fn integer_overflow() {
+        assert_eq!(
+            error("0 - 9223372036854775807 - 2"),
+            "1:25: integer overflow"
+        );
+        assert_eq!(error("9223372036854775807 * 2"), "1:21: integer overflow");
+        assert_eq!(
+            error("-(-9223372036854775807 - 1)"),
+            "1:1: integer overflow"
+        );
+        assert_eq!(error("--9223372036854775808"), "1:1: integer overflow");
+        assert_eq!(error("-9223372036854775808 / -1"), "1:22: integer overflow");
     }
 
     #[test]
@@ -554,6 +623,16 @@ mod tests {
             vm("fn f() { f() } f()").unwrap_err().to_string(),
             "1:10: stack overflow: more than 1000 nested calls"
         );
+        assert_eq!(
+            vm("fn f() {\n  f()\n}\nf()").unwrap_err().to_string(),
+            "2:3: stack overflow: more than 1000 nested calls"
+        );
+        assert_eq!(
+            vm("fn down(n) { if n == 1 { return 1; } down(n - 1) } down(1001)")
+                .unwrap_err()
+                .to_string(),
+            "1:38: stack overflow: more than 1000 nested calls"
+        );
     }
 
     #[test]
@@ -573,6 +652,10 @@ mod tests {
             "1:16: undefined variable: a"
         );
         assert_eq!(compile_error("let x = x;"), "1:9: undefined variable: x");
+        assert_eq!(
+            compile_error("let y = x; let x = 1; y"),
+            "1:9: undefined variable: x"
+        );
     }
 
     #[test]
@@ -584,6 +667,10 @@ mod tests {
         assert_eq!(
             compile_error("fn f() { y } { let y = 1; f() }"),
             "1:10: undefined variable: y"
+        );
+        assert_eq!(
+            compile_error("let count = 0; fn reset() { count = 0; }"),
+            "1:29: undefined variable: count"
         );
     }
 
@@ -597,6 +684,10 @@ mod tests {
         assert_eq!(
             compile_error("fn f() {} f = 1;"),
             "1:11: undefined variable: f"
+        );
+        assert_eq!(
+            compile_error("print(1, 2)"),
+            "1:1: print expects 1 argument, got 2"
         );
     }
 
