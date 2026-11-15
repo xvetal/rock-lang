@@ -3,7 +3,7 @@ use std::mem;
 use std::rc::Rc;
 
 use crate::chunk::{Bytecode, Function, Op};
-use crate::interp::{MAX_CALL_DEPTH, RuntimeError, RuntimeErrorKind, binary, boolean, unary};
+use crate::runtime::{MAX_CALL_DEPTH, RuntimeError, RuntimeErrorKind, binary, boolean, unary};
 use crate::value::Value;
 
 pub struct Vm<W: Write> {

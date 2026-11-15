@@ -6,6 +6,7 @@ mod compiler;
 mod interp;
 mod lexer;
 mod parser;
+mod runtime;
 mod value;
 mod vm;
 
