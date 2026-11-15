@@ -4,11 +4,17 @@ use crate::value::Value;
 
 pub struct Vm {
     stack: Vec<Value>,
+    globals: Vec<Value>,
+    locals: Vec<Value>,
 }
 
 impl Vm {
     pub fn new() -> Self {
-        Self { stack: Vec::new() }
+        Self {
+            stack: Vec::new(),
+            globals: Vec::new(),
+            locals: Vec::new(),
+        }
     }
 
     pub fn run(&mut self, chunk: &Chunk) -> Result<Value, RuntimeError> {
@@ -24,6 +30,19 @@ impl Vm {
                 Op::Pop => {
                     self.pop();
                 }
+                Op::DefineGlobal => {
+                    let value = self.pop();
+                    self.globals.push(value);
+                }
+                Op::GetGlobal(slot) => self.stack.push(self.globals[*slot].clone()),
+                Op::SetGlobal(slot) => self.globals[*slot] = self.pop(),
+                Op::DefineLocal => {
+                    let value = self.pop();
+                    self.locals.push(value);
+                }
+                Op::GetLocal(slot) => self.stack.push(self.locals[*slot].clone()),
+                Op::SetLocal(slot) => self.locals[*slot] = self.pop(),
+                Op::DropLocals(count) => self.locals.truncate(self.locals.len() - count),
                 Op::Unary(op) => {
                     let value = self.pop();
                     self.stack.push(unary(op, value).map_err(at)?);
@@ -64,13 +83,18 @@ mod tests {
     fn agree(input: &str) -> Result<Value, RuntimeError> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
         let expected = Interpreter::new(Vec::new()).run(&program);
-        let actual = Vm::new().run(&compile(&program));
+        let actual = Vm::new().run(&compile(&program).unwrap());
         assert_eq!(actual, expected, "VM and interpreter disagree on {input:?}");
         actual
     }
 
     fn error(input: &str) -> String {
         agree(input).unwrap_err().to_string()
+    }
+
+    fn compile_error(input: &str) -> String {
+        let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
+        compile(&program).unwrap_err().to_string()
     }
 
     #[test]
@@ -133,6 +157,51 @@ mod tests {
     }
 
     #[test]
+    fn global_variables() {
+        assert_eq!(agree("let x = 2; let y = x * 3; y + 1"), Ok(Value::Int(7)));
+        assert_eq!(agree("let x = 1; x = x + 10; x"), Ok(Value::Int(11)));
+        assert_eq!(agree("let x = 1; let x = x + 1; x"), Ok(Value::Int(2)));
+    }
+
+    #[test]
+    fn local_variables() {
+        assert_eq!(agree("{ let a = 1; let b = 2; a + b }"), Ok(Value::Int(3)));
+        assert_eq!(
+            agree("{ let a = 1; { let b = 2; a + b } }"),
+            Ok(Value::Int(3))
+        );
+        assert_eq!(agree("let x = 1; { let x = x + 1; x }"), Ok(Value::Int(2)));
+        assert_eq!(
+            agree("let x = 1; { let x = 2; x = 3; } x"),
+            Ok(Value::Int(1))
+        );
+        assert_eq!(
+            agree("let x = 1; { let y = 2; x = x + y; } x"),
+            Ok(Value::Int(3))
+        );
+    }
+
+    #[test]
+    fn locals_below_temporaries() {
+        assert_eq!(
+            agree("1 + { let a = 2; let b = 3; a * b }"),
+            Ok(Value::Int(7))
+        );
+        assert_eq!(
+            agree("let x = 5; if x > 3 { let y = x * 2; y } else { 0 }"),
+            Ok(Value::Int(10))
+        );
+    }
+
+    #[test]
+    fn locals_dropped_after_block() {
+        assert_eq!(
+            agree("{ let a = 1; } { let b = 2; } { let c = 3; c }"),
+            Ok(Value::Int(3))
+        );
+    }
+
+    #[test]
     fn errors() {
         assert_eq!(error("1 +\n  true"), "1:3: expected integer, got true");
         assert_eq!(error("10 / (2 - 2)"), "1:4: division by zero");
@@ -143,5 +212,33 @@ mod tests {
         assert_eq!(error("1 || true"), "1:3: expected bool, got 1");
         assert_eq!(error("if 1 { 2 }"), "1:4: expected bool, got 1");
         assert_eq!(error("{ 1 / 0; 2 }"), "1:5: division by zero");
+    }
+
+    #[test]
+    fn runtime_error_through_variable() {
+        assert_eq!(
+            error("let x = true;\nx + 1"),
+            "2:3: expected integer, got true"
+        );
+    }
+
+    #[test]
+    fn undefined_variables_are_compile_errors() {
+        assert_eq!(compile_error("x"), "1:1: undefined variable: x");
+        assert_eq!(compile_error("y = 1;"), "1:1: undefined variable: y");
+        assert_eq!(
+            compile_error("{ let a = 1; } a"),
+            "1:16: undefined variable: a"
+        );
+        assert_eq!(compile_error("let x = x;"), "1:9: undefined variable: x");
+    }
+
+    #[test]
+    fn undefined_variable_in_unreached_code_is_an_error() {
+        // The interpreter only fails when it reaches `y`; the compiler checks every name.
+        assert_eq!(
+            compile_error("if false { y }"),
+            "1:12: undefined variable: y"
+        );
     }
 }

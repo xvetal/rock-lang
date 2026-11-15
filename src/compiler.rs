@@ -1,48 +1,130 @@
+use std::fmt;
+
 use crate::ast::{Block, Expr, ExprKind, LogicalOp, Program, Stmt};
 use crate::chunk::{Chunk, Op};
 use crate::lexer::Pos;
 
-pub fn compile(program: &Program) -> Chunk {
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompileError {
+    pub kind: CompileErrorKind,
+    pub pos: Pos,
+}
+
+impl fmt::Display for CompileError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}: {}", self.pos, self.kind)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompileErrorKind {
+    UndefinedVariable(String),
+}
+
+impl CompileErrorKind {
+    fn at(self, pos: Pos) -> CompileError {
+        CompileError { kind: self, pos }
+    }
+}
+
+impl fmt::Display for CompileErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CompileErrorKind::UndefinedVariable(name) => write!(f, "undefined variable: {name}"),
+        }
+    }
+}
+
+pub fn compile(program: &Program) -> Result<Chunk, CompileError> {
     let mut compiler = Compiler {
         chunk: Chunk::default(),
+        globals: Vec::new(),
+        locals: Vec::new(),
+        depth: 0,
     };
-    compiler.stmts(&program.stmts);
+    compiler.stmts(&program.stmts)?;
     if let Some(expr) = &program.expr {
-        compiler.expr(expr);
+        compiler.expr(expr)?;
     }
-    compiler.chunk
+    Ok(compiler.chunk)
 }
 
 struct Compiler {
     chunk: Chunk,
+    globals: Vec<String>,
+    locals: Vec<String>,
+    depth: usize,
+}
+
+enum Slot {
+    Global(usize),
+    Local(usize),
 }
 
 impl Compiler {
-    fn stmts(&mut self, stmts: &[Stmt]) {
+    fn stmts(&mut self, stmts: &[Stmt]) -> Result<(), CompileError> {
         for stmt in stmts {
             match stmt {
+                Stmt::Let { name, value } => {
+                    self.expr(value)?;
+                    if self.depth == 0 {
+                        self.chunk.emit(Op::DefineGlobal, value.pos);
+                        self.globals.push(name.clone());
+                    } else {
+                        self.chunk.emit(Op::DefineLocal, value.pos);
+                        self.locals.push(name.clone());
+                    }
+                }
+                Stmt::Assign { name, value, pos } => {
+                    self.expr(value)?;
+                    let op = match self.resolve(name, *pos)? {
+                        Slot::Global(slot) => Op::SetGlobal(slot),
+                        Slot::Local(slot) => Op::SetLocal(slot),
+                    };
+                    self.chunk.emit(op, *pos);
+                }
                 Stmt::Expr(expr) => {
-                    self.expr(expr);
+                    self.expr(expr)?;
                     self.chunk.emit(Op::Pop, expr.pos);
                 }
-                Stmt::Let { .. } | Stmt::Assign { .. } | Stmt::Fn(_) => {
-                    todo!("variables and functions in the VM")
+                Stmt::Fn(_) => {
+                    todo!("functions in the VM")
                 }
             }
         }
+        Ok(())
     }
 
-    fn block(&mut self, block: &Block, pos: Pos) {
-        self.stmts(&block.stmts);
+    fn block(&mut self, block: &Block, pos: Pos) -> Result<(), CompileError> {
+        let outer = self.locals.len();
+        self.depth += 1;
+        self.stmts(&block.stmts)?;
         match &block.expr {
-            Some(value) => self.expr(value),
+            Some(value) => self.expr(value)?,
             None => {
                 self.chunk.emit(Op::Unit, pos);
             }
         }
+        self.depth -= 1;
+        let count = self.locals.len() - outer;
+        if count > 0 {
+            self.chunk.emit(Op::DropLocals(count), pos);
+            self.locals.truncate(outer);
+        }
+        Ok(())
     }
 
-    fn expr(&mut self, expr: &Expr) {
+    fn resolve(&self, name: &str, pos: Pos) -> Result<Slot, CompileError> {
+        if let Some(slot) = self.locals.iter().rposition(|n| n == name) {
+            Ok(Slot::Local(slot))
+        } else if let Some(slot) = self.globals.iter().rposition(|n| n == name) {
+            Ok(Slot::Global(slot))
+        } else {
+            Err(CompileErrorKind::UndefinedVariable(name.to_string()).at(pos))
+        }
+    }
+
+    fn expr(&mut self, expr: &Expr) -> Result<(), CompileError> {
         let pos = expr.pos;
         match &expr.kind {
             ExprKind::Int(n) => {
@@ -51,51 +133,64 @@ impl Compiler {
             ExprKind::Bool(b) => {
                 self.chunk.emit(Op::Bool(*b), pos);
             }
+            ExprKind::Var(name) => {
+                let op = match self.resolve(name, pos)? {
+                    Slot::Global(slot) => Op::GetGlobal(slot),
+                    Slot::Local(slot) => Op::GetLocal(slot),
+                };
+                self.chunk.emit(op, pos);
+            }
             ExprKind::Unary { op, operand } => {
-                self.expr(operand);
+                self.expr(operand)?;
                 self.chunk.emit(Op::Unary(op.clone()), pos);
             }
             ExprKind::Binary { op, left, right } => {
-                self.expr(left);
-                self.expr(right);
+                self.expr(left)?;
+                self.expr(right)?;
                 self.chunk.emit(Op::Binary(op.clone()), pos);
             }
-            ExprKind::Logical { op, left, right } => self.logical(op, left, right, pos),
-            ExprKind::Block(block) => self.block(block, pos),
+            ExprKind::Logical { op, left, right } => self.logical(op, left, right, pos)?,
+            ExprKind::Block(block) => self.block(block, pos)?,
             ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
             } => {
-                self.expr(cond);
+                self.expr(cond)?;
                 let to_else = self.chunk.emit(Op::JumpIfFalse(0), cond.pos);
-                self.block(then_branch, pos);
+                self.block(then_branch, pos)?;
                 let to_end = self.chunk.emit(Op::Jump(0), pos);
                 self.chunk.patch_jump(to_else);
                 match else_branch {
-                    Some(else_branch) => self.expr(else_branch),
+                    Some(else_branch) => self.expr(else_branch)?,
                     None => {
                         self.chunk.emit(Op::Unit, pos);
                     }
                 }
                 self.chunk.patch_jump(to_end);
             }
-            ExprKind::Var(_)
-            | ExprKind::Call { .. }
+            ExprKind::Call { .. }
             | ExprKind::While { .. }
             | ExprKind::Return(_)
             | ExprKind::Break
-            | ExprKind::Continue => todo!("variables, loops and functions in the VM"),
+            | ExprKind::Continue => todo!("loops and functions in the VM"),
         }
+        Ok(())
     }
 
     // Both operands must be bools: every operand goes through JumpIfFalse,
     // which reports a type error for anything else.
-    fn logical(&mut self, op: &LogicalOp, left: &Expr, right: &Expr, pos: Pos) {
+    fn logical(
+        &mut self,
+        op: &LogicalOp,
+        left: &Expr,
+        right: &Expr,
+        pos: Pos,
+    ) -> Result<(), CompileError> {
         let mut to_false = Vec::new();
         let mut to_true = Vec::new();
 
-        self.expr(left);
+        self.expr(left)?;
         let left_false = self.chunk.emit(Op::JumpIfFalse(0), pos);
         match op {
             LogicalOp::And => to_false.push(left_false),
@@ -105,7 +200,7 @@ impl Compiler {
             }
         }
 
-        self.expr(right);
+        self.expr(right)?;
         to_false.push(self.chunk.emit(Op::JumpIfFalse(0), pos));
         to_true.push(self.chunk.emit(Op::Jump(0), pos));
 
@@ -119,6 +214,7 @@ impl Compiler {
         }
         self.chunk.emit(Op::Bool(true), pos);
         self.chunk.patch_jump(to_end);
+        Ok(())
     }
 }
 
@@ -131,7 +227,7 @@ mod tests {
 
     fn code(input: &str) -> Vec<Op> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        compile(&program).code
+        compile(&program).unwrap().code
     }
 
     #[test]
@@ -217,9 +313,73 @@ mod tests {
     }
 
     #[test]
+    fn top_level_let_defines_global() {
+        assert_eq!(
+            code("let x = 1; x = x + 2;"),
+            [
+                Op::Int(1),
+                Op::DefineGlobal,
+                Op::GetGlobal(0),
+                Op::Int(2),
+                Op::Binary(Add),
+                Op::SetGlobal(0)
+            ]
+        );
+    }
+
+    #[test]
+    fn shadowing_gets_new_slot() {
+        assert_eq!(
+            code("let x = 1; let x = 2; x"),
+            [
+                Op::Int(1),
+                Op::DefineGlobal,
+                Op::Int(2),
+                Op::DefineGlobal,
+                Op::GetGlobal(1)
+            ]
+        );
+    }
+
+    #[test]
+    fn block_let_defines_local() {
+        assert_eq!(
+            code("let x = 1; { let y = x; y = 2; y }"),
+            [
+                Op::Int(1),
+                Op::DefineGlobal,
+                Op::GetGlobal(0),
+                Op::DefineLocal,
+                Op::Int(2),
+                Op::SetLocal(0),
+                Op::GetLocal(0),
+                Op::DropLocals(1)
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_blocks_number_locals_from_outer() {
+        assert_eq!(
+            code("{ let a = 1; { let b = 2; a + b } }"),
+            [
+                Op::Int(1),
+                Op::DefineLocal,
+                Op::Int(2),
+                Op::DefineLocal,
+                Op::GetLocal(0),
+                Op::GetLocal(1),
+                Op::Binary(Add),
+                Op::DropLocals(1),
+                Op::DropLocals(1)
+            ]
+        );
+    }
+
+    #[test]
     fn positions_follow_code() {
         let program = Parser::new(tokenize("1 +\n  2").unwrap()).parse().unwrap();
-        let chunk = compile(&program);
+        let chunk = compile(&program).unwrap();
         let positions: Vec<String> = chunk.positions.iter().map(|p| p.to_string()).collect();
         assert_eq!(positions, ["1:1", "2:3", "1:3"]);
     }
