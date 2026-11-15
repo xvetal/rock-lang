@@ -94,7 +94,8 @@ pub fn compile(program: &Program, scope: &Scope) -> Result<Bytecode, CompileErro
 }
 
 fn function(decl: &FnDecl, names: &[String]) -> Result<Rc<Function>, CompileError> {
-    let mut compiler = Compiler::new(names, decl.params.clone());
+    let params = decl.params.iter().map(|p| p.name.clone()).collect();
+    let mut compiler = Compiler::new(names, params);
     compiler.block(&decl.body, decl.pos)?;
     compiler.chunk.emit(Op::Return, decl.pos);
     Ok(Rc::new(Function {
@@ -583,16 +584,17 @@ mod tests {
     #[test]
     fn call_pushes_callee_then_arguments() {
         assert_eq!(
-            code("fn add(a, b) { a + b } add(1, 2)"),
+            code("fn add(a: int, b: int) -> int { a + b } add(1, 2)"),
             [Op::Function(0), Op::Int(1), Op::Int(2), Op::Call(2)]
         );
     }
 
     #[test]
     fn function_body_starts_with_parameters() {
-        let program = Parser::new(tokenize("fn add(a, b) { let c = a + b; c }").unwrap())
-            .parse()
-            .unwrap();
+        let program =
+            Parser::new(tokenize("fn add(a: int, b: int) -> int { let c = a + b; c }").unwrap())
+                .parse()
+                .unwrap();
         let bytecode = compile(&program, &Scope::default()).unwrap();
         assert_eq!(
             bytecode.functions[0].chunk.code,

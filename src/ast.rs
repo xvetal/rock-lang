@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::lexer::Pos;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,10 +85,49 @@ pub struct Block {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Type {
+    Int,
+    Bool,
+    Unit,
+    Fn { params: Vec<Type>, ret: Box<Type> },
+}
+
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Type::Int => write!(f, "int"),
+            Type::Bool => write!(f, "bool"),
+            Type::Unit => write!(f, "()"),
+            Type::Fn { params, ret } => {
+                write!(f, "fn(")?;
+                for (i, param) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{param}")?;
+                }
+                write!(f, ")")?;
+                if **ret != Type::Unit {
+                    write!(f, " -> {ret}")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+    pub name: String,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct FnDecl {
     pub name: String,
     pub pos: Pos,
-    pub params: Vec<String>,
+    pub params: Vec<Param>,
+    pub ret: Type,
     pub body: Block,
 }
 

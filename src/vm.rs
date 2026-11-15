@@ -366,25 +366,34 @@ mod tests {
 
     #[test]
     fn functions() {
-        assert_eq!(vm("fn add(a, b) { a + b } add(1, 2)"), Ok(Value::Int(3)));
+        assert_eq!(
+            vm("fn add(a: int, b: int) -> int { a + b } add(1, 2)"),
+            Ok(Value::Int(3))
+        );
         assert_eq!(vm("fn f() {} f()"), Ok(Value::Unit));
         assert_eq!(
-            vm("fn fact(n) { if n <= 1 { 1 } else { n * fact(n - 1) } } fact(10)"),
+            vm("fn fact(n: int) -> int { if n <= 1 { 1 } else { n * fact(n - 1) } } fact(10)"),
             Ok(Value::Int(3628800))
         );
         assert_eq!(
-            vm("fn f(x) { let y = x * 2; y + 1 } let a = 1; f(5) + a"),
+            vm("fn f(x: int) -> int { let y = x * 2; y + 1 } let a = 1; f(5) + a"),
             Ok(Value::Int(12))
         );
         assert_eq!(vm("fn f() {}"), Ok(Value::Unit));
-        assert_eq!(vm("fn f() { 1 } { let y = 2; f() + y }"), Ok(Value::Int(3)));
+        assert_eq!(
+            vm("fn f() -> int { 1 } { let y = 2; f() + y }"),
+            Ok(Value::Int(3))
+        );
     }
 
     #[test]
     fn parameters_and_locals_are_separate_from_outer_variables() {
-        assert_eq!(vm("let x = 1; fn f(x) { x } f(2) + x"), Ok(Value::Int(3)));
         assert_eq!(
-            vm("let x = 1; fn f() { let x = 2; x } f() + x"),
+            vm("let x = 1; fn f(x: int) -> int { x } f(2) + x"),
+            Ok(Value::Int(3))
+        );
+        assert_eq!(
+            vm("let x = 1; fn f() -> int { let x = 2; x } f() + x"),
             Ok(Value::Int(3))
         );
     }
@@ -392,37 +401,39 @@ mod tests {
     #[test]
     fn mutual_recursion() {
         assert_eq!(
-            vm("fn even(n) { if n == 0 { true } else { odd(n - 1) } }
-                 fn odd(n) { if n == 0 { false } else { even(n - 1) } }
-                 even(10)"),
+            vm(
+                "fn even(n: int) -> bool { if n == 0 { true } else { odd(n - 1) } }
+                 fn odd(n: int) -> bool { if n == 0 { false } else { even(n - 1) } }
+                 even(10)"
+            ),
             Ok(Value::Bool(true))
         );
     }
 
     #[test]
     fn functions_are_visible_before_declaration() {
-        assert_eq!(vm("let x = f(); fn f() { 7 } x"), Ok(Value::Int(7)));
+        assert_eq!(vm("let x = f(); fn f() -> int { 7 } x"), Ok(Value::Int(7)));
     }
 
     #[test]
     fn return_from_function() {
         assert_eq!(
-            vm("fn abs(x) { if x < 0 { return -x; } x } abs(-5) + abs(3)"),
+            vm("fn abs(x: int) -> int { if x < 0 { return -x; } x } abs(-5) + abs(3)"),
             Ok(Value::Int(8))
         );
         assert_eq!(
             vm(
-                "fn root(n) { let i = 0; while true { if i * i >= n { return i; } i = i + 1; } } root(50)"
+                "fn root(n: int) -> int { let i = 0; while true { if i * i >= n { return i; } i = i + 1; } } root(50)"
             ),
             Ok(Value::Int(8))
         );
-        assert_eq!(vm("fn f() { return; 1 } f()"), Ok(Value::Unit));
+        assert_eq!(vm("fn f() { return; 1; } f()"), Ok(Value::Unit));
         assert_eq!(
-            vm("fn sign(x) { if x < 0 { return -1 } 1 } sign(-3)"),
+            vm("fn sign(x: int) -> int { if x < 0 { return -1 } 1 } sign(-3)"),
             Ok(Value::Int(-1))
         );
         assert_eq!(
-            vm("fn g() { return 1; } fn f() { g() + 1 } f()"),
+            vm("fn g() -> int { return 1; } fn f() -> int { g() + 1 } f()"),
             Ok(Value::Int(2))
         );
         assert_eq!(output("fn f() { print(1); return; print(2); } f();"), "1\n");
@@ -430,13 +441,16 @@ mod tests {
 
     #[test]
     fn return_cleans_up_stacks() {
-        assert_eq!(vm("fn f() { 1 + return 2; } 10 + f()"), Ok(Value::Int(12)));
         assert_eq!(
-            vm("fn f() { let a = 1; { let b = 2; return a + b; } } let x = 5; f() + x"),
+            vm("fn f() -> int { 1 + return 2; } 10 + f()"),
+            Ok(Value::Int(12))
+        );
+        assert_eq!(
+            vm("fn f() -> int { let a = 1; { let b = 2; return a + b; } } let x = 5; f() + x"),
             Ok(Value::Int(8))
         );
         assert_eq!(
-            vm("fn f() { { { return 1; } } } { let y = 2; f() + y }"),
+            vm("fn f() -> int { { { return 1; } } } { let y = 2; f() + y }"),
             Ok(Value::Int(3))
         );
     }
@@ -444,26 +458,34 @@ mod tests {
     #[test]
     fn functions_are_values() {
         assert_eq!(
-            vm("fn add(a, b) { a + b } let plus = add; plus(1, 2)"),
+            vm("fn add(a: int, b: int) -> int { a + b } let plus = add; plus(1, 2)"),
             Ok(Value::Int(3))
         );
         assert_eq!(
-            vm("fn twice(f, x) { f(f(x)) } fn inc(x) { x + 1 } twice(inc, 5)"),
+            vm(
+                "fn twice(f: fn(int) -> int, x: int) -> int { f(f(x)) } fn inc(x: int) -> int { x + 1 } twice(inc, 5)"
+            ),
             Ok(Value::Int(7))
         );
-        assert_eq!(output("fn add(a, b) { a + b } print(add);"), "<fn add>\n");
+        assert_eq!(
+            output("fn add(a: int, b: int) -> int { a + b } print(add);"),
+            "<fn add>\n"
+        );
     }
 
     #[test]
     fn variables_shadow_functions() {
-        assert_eq!(vm("fn f() { 1 } let f = 2; f"), Ok(Value::Int(2)));
-        assert_eq!(vm("fn f() { 1 } fn g(f) { f } g(5)"), Ok(Value::Int(5)));
+        assert_eq!(vm("fn f() -> int { 1 } let f = 2; f"), Ok(Value::Int(2)));
+        assert_eq!(
+            vm("fn f() -> int { 1 } fn g(f: int) -> int { f } g(5)"),
+            Ok(Value::Int(5))
+        );
     }
 
     #[test]
     fn deep_recursion_needs_no_big_stack() {
         assert_eq!(
-            vm("fn down(n) { if n == 1 { return 1; } down(n - 1) } down(1000)"),
+            vm("fn down(n: int) -> int { if n == 1 { return 1; } down(n - 1) } down(1000)"),
             Ok(Value::Int(1))
         );
     }
@@ -478,20 +500,25 @@ mod tests {
             "0\n1\n2\n"
         );
         assert_eq!(
-            output("fn hello(x) { print(x); } hello(1); hello(2);"),
+            output("fn hello(x: int) { print(x); } hello(1); hello(2);"),
             "1\n2\n"
         );
     }
 
     #[test]
     fn functions_shadow_print() {
-        assert_eq!(output("fn print(x) { x } print(1);"), "");
+        assert_eq!(output("fn print(x: int) -> int { x } print(1);"), "");
     }
 
     #[test]
     fn session_keeps_variables_and_functions() {
         assert_eq!(
-            session(&["let x = 1;", "fn inc(n) { n + 1 }", "x = inc(x);", "inc(x)"]),
+            session(&[
+                "let x = 1;",
+                "fn inc(n: int) -> int { n + 1 }",
+                "x = inc(x);",
+                "inc(x)"
+            ]),
             [
                 Ok(Value::Unit),
                 Ok(Value::Unit),
@@ -505,9 +532,9 @@ mod tests {
     fn session_redefines_functions() {
         assert_eq!(
             session(&[
-                "fn f() { 1 }",
-                "fn g() { f() }",
-                "fn f() { 2 }",
+                "fn f() -> int { 1 }",
+                "fn g() -> int { f() }",
+                "fn f() -> int { 2 }",
                 "f() * 10 + g()"
             ]),
             [
@@ -559,15 +586,18 @@ mod tests {
     #[test]
     fn call_errors() {
         assert_eq!(
-            error("fn add(a, b) { a + b } add(1)"),
-            "1:24: add expects 2 arguments, got 1"
+            error("fn add(a: int, b: int) -> int { a + b } add(1)"),
+            "1:41: add expects 2 arguments, got 1"
         );
         assert_eq!(error("let f = 2; f()"), "1:12: expected function, got 2");
         assert_eq!(
             error("let print = 1; print(2)"),
             "1:16: expected function, got 1"
         );
-        assert_eq!(error("fn f() {\n  1 / 0\n}\nf()"), "2:5: division by zero");
+        assert_eq!(
+            error("fn f() -> int {\n  1 / 0\n}\nf()"),
+            "2:5: division by zero"
+        );
     }
 
     #[test]
@@ -588,10 +618,10 @@ mod tests {
             "2:3: stack overflow: more than 1000 nested calls"
         );
         assert_eq!(
-            vm("fn down(n) { if n == 1 { return 1; } down(n - 1) } down(1001)")
+            vm("fn down(n: int) -> int { if n == 1 { return 1; } down(n - 1) } down(1001)")
                 .unwrap_err()
                 .to_string(),
-            "1:38: stack overflow: more than 1000 nested calls"
+            "1:50: stack overflow: more than 1000 nested calls"
         );
     }
 
@@ -621,12 +651,12 @@ mod tests {
     #[test]
     fn functions_do_not_see_outer_variables() {
         assert_eq!(
-            compile_error("let base = 10; fn f(x) { base + x } f(1)"),
-            "1:26: undefined variable: base"
+            compile_error("let base = 10; fn f(x: int) -> int { base + x } f(1)"),
+            "1:38: undefined variable: base"
         );
         assert_eq!(
-            compile_error("fn f() { y } { let y = 1; f() }"),
-            "1:10: undefined variable: y"
+            compile_error("fn f() -> int { y } { let y = 1; f() }"),
+            "1:17: undefined variable: y"
         );
         assert_eq!(
             compile_error("let count = 0; fn reset() { count = 0; }"),

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Function parameters need type annotations, and functions declare their return type, e.g. `fn add(a: int, b: int) -> int`; without `->` a function returns `()`. Types are `int`, `bool`, `()` and function types such as `fn(int) -> int`
+
 ## [0.7.0] - 2026-11-15
 
 ### Changed

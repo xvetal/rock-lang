@@ -30,6 +30,8 @@ pub enum Token {
     OrOr,
     Semicolon,
     Comma,
+    Colon,
+    Arrow,
     LParen,
     RParen,
     LBrace,
@@ -68,6 +70,8 @@ impl fmt::Display for Token {
             Token::OrOr => write!(f, "||"),
             Token::Semicolon => write!(f, ";"),
             Token::Comma => write!(f, ","),
+            Token::Colon => write!(f, ":"),
+            Token::Arrow => write!(f, "->"),
             Token::LParen => write!(f, "("),
             Token::RParen => write!(f, ")"),
             Token::LBrace => write!(f, "{{"),
@@ -118,6 +122,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
         let token = match c {
             _ if c.is_whitespace() => continue,
             '+' => Token::Plus,
+            '-' if eat(&mut chars, &mut pos, '>') => Token::Arrow,
             '-' => Token::Minus,
             '*' => Token::Star,
             '/' => Token::Slash,
@@ -133,6 +138,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
             '>' => Token::Gt,
             ';' => Token::Semicolon,
             ',' => Token::Comma,
+            ':' => Token::Colon,
             '(' => Token::LParen,
             ')' => Token::RParen,
             '{' => Token::LBrace,
@@ -434,7 +440,7 @@ mod tests {
         let source = "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 \
                       == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; \
                       { } if x { } else { } while x { break ; continue } \
-                      fn f ( ) { return }";
+                      fn f ( a : int ) -> int { return }";
         let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens
             .iter()
@@ -442,6 +448,23 @@ mod tests {
             .map(|t| t.to_string())
             .collect();
         assert_eq!(printed.join(" "), source);
+    }
+
+    #[test]
+    fn arrow_and_minus() {
+        assert_eq!(
+            tokens("-> - > --> -1"),
+            Ok(vec![
+                Token::Arrow,
+                Token::Minus,
+                Token::Gt,
+                Token::Minus,
+                Token::Arrow,
+                Token::Minus,
+                Token::Int(1),
+                Token::Eof
+            ])
+        );
     }
 
     #[test]

@@ -1,6 +1,8 @@
 use std::fmt;
 
-use crate::ast::{BinaryOp, Block, Expr, ExprKind, FnDecl, LogicalOp, Program, Stmt, UnaryOp};
+use crate::ast::{
+    BinaryOp, Block, Expr, ExprKind, FnDecl, LogicalOp, Param, Program, Stmt, Type, UnaryOp,
+};
 use crate::lexer::{Located, Pos, Token};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +22,7 @@ pub enum ParseErrorKind {
     Expected { what: &'static str, found: Token },
     Unexpected(Token),
     IntegerTooLarge,
+    UnknownType(String),
     NestedFn,
     ReturnOutsideFn,
     BreakOutsideLoop,
@@ -46,6 +49,7 @@ impl fmt::Display for ParseErrorKind {
             }
             ParseErrorKind::Unexpected(token) => write!(f, "unexpected '{token}'"),
             ParseErrorKind::IntegerTooLarge => write!(f, "integer literal is too large"),
+            ParseErrorKind::UnknownType(name) => write!(f, "unknown type: {name}"),
             ParseErrorKind::NestedFn => {
                 write!(f, "functions can only be declared at the top level")
             }
@@ -135,7 +139,8 @@ impl Parser {
         let pos = self.peek_pos();
         let name = self.ident("function name after 'fn'")?;
         self.expect(Token::LParen, "'('")?;
-        let params = self.list(|p| p.ident("parameter name"))?;
+        let params = self.list(Self::param)?;
+        let ret = self.ret_type()?;
         self.expect(Token::LBrace, "'{'")?;
         self.in_fn = true;
         let body = self.block()?;
@@ -144,8 +149,51 @@ impl Parser {
             name,
             pos,
             params,
+            ret,
             body,
         }))
+    }
+
+    fn param(&mut self) -> Result<Param, ParseError> {
+        let name = self.ident("parameter name")?;
+        self.expect(Token::Colon, "':'")?;
+        let ty = self.ty()?;
+        Ok(Param { name, ty })
+    }
+
+    fn ret_type(&mut self) -> Result<Type, ParseError> {
+        if self.peek() == &Token::Arrow {
+            self.advance();
+            self.ty()
+        } else {
+            Ok(Type::Unit)
+        }
+    }
+
+    fn ty(&mut self) -> Result<Type, ParseError> {
+        let pos = self.peek_pos();
+        match self.advance() {
+            Token::Ident(name) => match name.as_str() {
+                "int" => Ok(Type::Int),
+                "bool" => Ok(Type::Bool),
+                _ => Err(ParseErrorKind::UnknownType(name).at(pos)),
+            },
+            Token::LParen => {
+                self.expect(Token::RParen, "')'")?;
+                Ok(Type::Unit)
+            }
+            Token::Fn => {
+                self.expect(Token::LParen, "'('")?;
+                let params = self.list(Self::ty)?;
+                let ret = Box::new(self.ret_type()?);
+                Ok(Type::Fn { params, ret })
+            }
+            other => Err(ParseErrorKind::Expected {
+                what: "type",
+                found: other,
+            }
+            .at(pos)),
+        }
     }
 
     fn assign_stmt(&mut self, name: String) -> Result<Stmt, ParseError> {
@@ -609,16 +657,27 @@ mod tests {
         .at(NO_POS)
     }
 
-    fn fn_decl(name: &str, params: &[&str], body: Expr) -> Stmt {
+    fn fn_decl(name: &str, params: &[(&str, Type)], ret: Type, body: Expr) -> Stmt {
         let ExprKind::Block(body) = body.kind else {
             panic!("function body must be a block");
         };
         Stmt::Fn(FnDecl {
             name: name.to_string(),
             pos: NO_POS,
-            params: params.iter().map(|p| p.to_string()).collect(),
+            params: params
+                .iter()
+                .map(|(name, ty)| Param {
+                    name: name.to_string(),
+                    ty: ty.clone(),
+                })
+                .collect(),
+            ret,
             body,
         })
+    }
+
+    fn parse_type(input: &str) -> Result<Type, ParseError> {
+        Parser::new(tokenize(input).unwrap()).ty()
     }
 
     fn while_expr(cond: Expr, body: Expr) -> Expr {
@@ -1004,11 +1063,12 @@ mod tests {
     #[test]
     fn function_declaration() {
         assert_eq!(
-            parse_program("fn add(a, b) { a + b } add(1, 2)"),
+            parse_program("fn add(a: int, b: int) -> int { a + b } add(1, 2)"),
             Ok(Program {
                 stmts: vec![fn_decl(
                     "add",
-                    &["a", "b"],
+                    &[("a", Type::Int), ("b", Type::Int)],
+                    Type::Int,
                     block(vec![], Some(bin(Add, var("a"), var("b"))))
                 )],
                 expr: Some(call("add", vec![int(1), int(2)]))
@@ -1019,9 +1079,9 @@ mod tests {
     #[test]
     fn function_without_parameters() {
         assert_eq!(
-            parse_program("fn zero() { 0 }"),
+            parse_program("fn zero() -> int { 0 }"),
             Ok(Program {
-                stmts: vec![fn_decl("zero", &[], block(vec![], Some(int(0))))],
+                stmts: vec![fn_decl("zero", &[], Type::Int, block(vec![], Some(int(0))))],
                 expr: None
             })
         );
@@ -1030,11 +1090,12 @@ mod tests {
     #[test]
     fn return_statement() {
         assert_eq!(
-            parse_program("fn f() { return 1; }"),
+            parse_program("fn f() -> int { return 1; }"),
             Ok(Program {
                 stmts: vec![fn_decl(
                     "f",
                     &[],
+                    Type::Int,
                     block(vec![Stmt::Expr(ret(Some(int(1))))], None)
                 )],
                 expr: None
@@ -1047,7 +1108,12 @@ mod tests {
         assert_eq!(
             parse_program("fn f() { return }"),
             Ok(Program {
-                stmts: vec![fn_decl("f", &[], block(vec![], Some(ret(None))))],
+                stmts: vec![fn_decl(
+                    "f",
+                    &[],
+                    Type::Unit,
+                    block(vec![], Some(ret(None)))
+                )],
                 expr: None
             })
         );
@@ -1056,12 +1122,72 @@ mod tests {
     #[test]
     fn return_takes_whole_expression() {
         assert_eq!(
-            parse_program("fn f() { return 1 + 2; }"),
+            parse_program("fn f() -> int { return 1 + 2; }"),
             Ok(Program {
                 stmts: vec![fn_decl(
                     "f",
                     &[],
+                    Type::Int,
                     block(vec![Stmt::Expr(ret(Some(bin(Add, int(1), int(2)))))], None)
+                )],
+                expr: None
+            })
+        );
+    }
+
+    #[test]
+    fn types() {
+        assert_eq!(parse_type("int"), Ok(Type::Int));
+        assert_eq!(parse_type("bool"), Ok(Type::Bool));
+        assert_eq!(parse_type("()"), Ok(Type::Unit));
+        assert_eq!(
+            parse_type("fn(int, bool) -> int"),
+            Ok(Type::Fn {
+                params: vec![Type::Int, Type::Bool],
+                ret: Box::new(Type::Int)
+            })
+        );
+        assert_eq!(
+            parse_type("fn()"),
+            Ok(Type::Fn {
+                params: vec![],
+                ret: Box::new(Type::Unit)
+            })
+        );
+    }
+
+    #[test]
+    fn type_display() {
+        for source in [
+            "int",
+            "bool",
+            "()",
+            "fn()",
+            "fn(int, fn(int) -> bool) -> fn() -> int",
+        ] {
+            assert_eq!(parse_type(source).unwrap().to_string(), source);
+        }
+    }
+
+    #[test]
+    fn function_with_types() {
+        assert_eq!(
+            parse_program("fn apply(f: fn(int) -> int, x: int) -> int { f(x) }"),
+            Ok(Program {
+                stmts: vec![fn_decl(
+                    "apply",
+                    &[
+                        (
+                            "f",
+                            Type::Fn {
+                                params: vec![Type::Int],
+                                ret: Box::new(Type::Int)
+                            }
+                        ),
+                        ("x", Type::Int)
+                    ],
+                    Type::Int,
+                    block(vec![], Some(call("f", vec![var("x")])))
                 )],
                 expr: None
             })
@@ -1490,7 +1616,7 @@ mod tests {
     #[test]
     fn function_without_name() {
         assert_eq!(
-            parse_program("fn (a) {}"),
+            parse_program("fn (a: int) {}"),
             Err(at(
                 expected("function name after 'fn'", Token::LParen),
                 1,
@@ -1548,6 +1674,38 @@ mod tests {
         assert_eq!(
             parse_program("fn f() { break; }"),
             Err(at(ParseErrorKind::BreakOutsideLoop, 1, 10))
+        );
+    }
+
+    #[test]
+    fn parameter_needs_type() {
+        assert_eq!(
+            parse_program("fn f(a) {}"),
+            Err(at(expected("':'", Token::RParen), 1, 7))
+        );
+        assert_eq!(
+            parse_program("fn f(a: 1) {}"),
+            Err(at(expected("type", Token::Int(1)), 1, 9))
+        );
+    }
+
+    #[test]
+    fn unknown_type() {
+        assert_eq!(
+            parse_program("fn f(a: string) {}"),
+            Err(at(ParseErrorKind::UnknownType("string".to_string()), 1, 9))
+        );
+        assert_eq!(
+            ParseErrorKind::UnknownType("string".to_string()).to_string(),
+            "unknown type: string"
+        );
+    }
+
+    #[test]
+    fn return_type_after_arrow() {
+        assert_eq!(
+            parse_program("fn f() -> {}"),
+            Err(at(expected("type", Token::LBrace), 1, 11))
         );
     }
 }
