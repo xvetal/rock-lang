@@ -55,7 +55,7 @@ pub fn compile(program: &Program, scope: &Scope) -> Result<Bytecode, CompileErro
         .stmts
         .iter()
         .filter_map(|stmt| match stmt {
-            Stmt::Fn(decl) => Some(decl.as_ref()),
+            Stmt::Fn(decl) => Some(decl),
             _ => None,
         })
         .collect();

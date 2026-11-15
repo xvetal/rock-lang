@@ -88,12 +88,12 @@ impl<W: Write> Vm<W> {
                 }
                 Op::Function(index) => {
                     let function = Rc::clone(&self.functions[index]);
-                    self.stack.push(Value::VmFunction(function));
+                    self.stack.push(Value::Function(function));
                 }
                 Op::Call(argc) => {
                     let args = self.stack.len() - argc;
                     let function = match &self.stack[args - 1] {
-                        Value::VmFunction(function) => Rc::clone(function),
+                        Value::Function(function) => Rc::clone(function),
                         found => {
                             return Err(at(RuntimeErrorKind::TypeMismatch {
                                 expected: "function",
@@ -151,39 +151,27 @@ impl<W: Write> Vm<W> {
 mod tests {
     use super::*;
     use crate::compiler::{Scope, compile};
-    use crate::interp::Interpreter;
     use crate::lexer::tokenize;
     use crate::parser::Parser;
 
-    fn run_both(input: &str) -> (Result<Value, RuntimeError>, String) {
+    fn run(input: &str) -> (Result<Value, RuntimeError>, String) {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        let mut expected_out = Vec::new();
-        let expected = Interpreter::new(&mut expected_out).run(&program);
-        let mut actual_out = Vec::new();
-        let actual = Vm::new(&mut actual_out).run(&compile(&program, &Scope::default()).unwrap());
-        assert_eq!(actual, expected, "VM and interpreter disagree on {input:?}");
-        assert_eq!(
-            actual_out, expected_out,
-            "VM and interpreter print differently for {input:?}"
-        );
-        (actual, String::from_utf8(actual_out).unwrap())
-    }
-
-    fn agree(input: &str) -> Result<Value, RuntimeError> {
-        run_both(input).0
-    }
-
-    fn output(input: &str) -> String {
-        run_both(input).1
+        let bytecode = compile(&program, &Scope::default()).unwrap();
+        let mut out = Vec::new();
+        let result = Vm::new(&mut out).run(&bytecode);
+        (result, String::from_utf8(out).unwrap())
     }
 
     fn vm(input: &str) -> Result<Value, RuntimeError> {
-        let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        Vm::new(Vec::new()).run(&compile(&program, &Scope::default()).unwrap())
+        run(input).0
+    }
+
+    fn output(input: &str) -> String {
+        run(input).1
     }
 
     fn error(input: &str) -> String {
-        agree(input).unwrap_err().to_string()
+        vm(input).unwrap_err().to_string()
     }
 
     fn compile_error(input: &str) -> String {
@@ -210,29 +198,29 @@ mod tests {
 
     #[test]
     fn arithmetic() {
-        assert_eq!(agree("1 + 2 * 3"), Ok(Value::Int(7)));
-        assert_eq!(agree("-(4 - 10) / 2"), Ok(Value::Int(3)));
-        assert_eq!(agree("10 - 3 - 2"), Ok(Value::Int(5)));
-        assert_eq!(agree("-9223372036854775808"), Ok(Value::Int(i64::MIN)));
-        assert_eq!(agree("-9223372036854775807 - 1"), Ok(Value::Int(i64::MIN)));
-        assert_eq!(agree("7 / 2"), Ok(Value::Int(3)));
-        assert_eq!(agree("--5"), Ok(Value::Int(5)));
+        assert_eq!(vm("1 + 2 * 3"), Ok(Value::Int(7)));
+        assert_eq!(vm("-(4 - 10) / 2"), Ok(Value::Int(3)));
+        assert_eq!(vm("10 - 3 - 2"), Ok(Value::Int(5)));
+        assert_eq!(vm("-9223372036854775808"), Ok(Value::Int(i64::MIN)));
+        assert_eq!(vm("-9223372036854775807 - 1"), Ok(Value::Int(i64::MIN)));
+        assert_eq!(vm("7 / 2"), Ok(Value::Int(3)));
+        assert_eq!(vm("--5"), Ok(Value::Int(5)));
     }
 
     #[test]
     fn comparisons() {
-        assert_eq!(agree("1 + 1 == 2"), Ok(Value::Bool(true)));
-        assert_eq!(agree("3 <= 2"), Ok(Value::Bool(false)));
-        assert_eq!(agree("true != false"), Ok(Value::Bool(true)));
-        assert_eq!(agree("1 < 2"), Ok(Value::Bool(true)));
-        assert_eq!(agree("1 > 2"), Ok(Value::Bool(false)));
-        assert_eq!(agree("2 >= 2"), Ok(Value::Bool(true)));
-        assert_eq!(agree("print(1) == print(2)"), Ok(Value::Bool(true)));
+        assert_eq!(vm("1 + 1 == 2"), Ok(Value::Bool(true)));
+        assert_eq!(vm("3 <= 2"), Ok(Value::Bool(false)));
+        assert_eq!(vm("true != false"), Ok(Value::Bool(true)));
+        assert_eq!(vm("1 < 2"), Ok(Value::Bool(true)));
+        assert_eq!(vm("1 > 2"), Ok(Value::Bool(false)));
+        assert_eq!(vm("2 >= 2"), Ok(Value::Bool(true)));
+        assert_eq!(vm("print(1) == print(2)"), Ok(Value::Bool(true)));
     }
 
     #[test]
     fn logical_operators() {
-        assert_eq!(agree("!true"), Ok(Value::Bool(false)));
+        assert_eq!(vm("!true"), Ok(Value::Bool(false)));
         for (input, expected) in [
             ("true && true", true),
             ("true && false", false),
@@ -243,80 +231,68 @@ mod tests {
             ("false || true", true),
             ("false || false", false),
         ] {
-            assert_eq!(agree(input), Ok(Value::Bool(expected)), "{input}");
+            assert_eq!(vm(input), Ok(Value::Bool(expected)), "{input}");
         }
     }
 
     #[test]
     fn logical_operators_short_circuit() {
-        assert_eq!(agree("false && 1 / 0 == 0"), Ok(Value::Bool(false)));
-        assert_eq!(agree("true || 1 / 0 == 0"), Ok(Value::Bool(true)));
+        assert_eq!(vm("false && 1 / 0 == 0"), Ok(Value::Bool(false)));
+        assert_eq!(vm("true || 1 / 0 == 0"), Ok(Value::Bool(true)));
     }
 
     #[test]
     fn if_else() {
-        assert_eq!(agree("if 1 < 2 { 10 } else { 20 }"), Ok(Value::Int(10)));
-        assert_eq!(agree("if 1 > 2 { 10 } else { 20 }"), Ok(Value::Int(20)));
+        assert_eq!(vm("if 1 < 2 { 10 } else { 20 }"), Ok(Value::Int(10)));
+        assert_eq!(vm("if 1 > 2 { 10 } else { 20 }"), Ok(Value::Int(20)));
         assert_eq!(
-            agree("if false { 1 } else if false { 2 } else { 3 }"),
+            vm("if false { 1 } else if false { 2 } else { 3 }"),
             Ok(Value::Int(3))
         );
-        assert_eq!(agree("if false { 1 }"), Ok(Value::Unit));
-        assert_eq!(agree("if false { 1 / 0 } else { 2 }"), Ok(Value::Int(2)));
+        assert_eq!(vm("if false { 1 }"), Ok(Value::Unit));
+        assert_eq!(vm("if false { 1 / 0 } else { 2 }"), Ok(Value::Int(2)));
         assert_eq!(output("if true { print(1); } else { print(2); }"), "1\n");
     }
 
     #[test]
     fn blocks_and_statements() {
-        assert_eq!(agree("{ 1; 2; 3 }"), Ok(Value::Int(3)));
-        assert_eq!(agree("{ 1 + 2; }"), Ok(Value::Unit));
-        assert_eq!(agree("{}"), Ok(Value::Unit));
-        assert_eq!(agree("1; 2;"), Ok(Value::Unit));
-        assert_eq!(agree(""), Ok(Value::Unit));
-        assert_eq!(agree("if true { 1 } 2"), Ok(Value::Int(2)));
+        assert_eq!(vm("{ 1; 2; 3 }"), Ok(Value::Int(3)));
+        assert_eq!(vm("{ 1 + 2; }"), Ok(Value::Unit));
+        assert_eq!(vm("{}"), Ok(Value::Unit));
+        assert_eq!(vm("1; 2;"), Ok(Value::Unit));
+        assert_eq!(vm(""), Ok(Value::Unit));
+        assert_eq!(vm("if true { 1 } 2"), Ok(Value::Int(2)));
     }
 
     #[test]
     fn top_level_variables() {
-        assert_eq!(agree("let x = 2; let y = x * 3; y + 1"), Ok(Value::Int(7)));
-        assert_eq!(agree("let x = 1; x = x + 10; x"), Ok(Value::Int(11)));
-        assert_eq!(agree("let x = 1; let x = x + 1; x"), Ok(Value::Int(2)));
+        assert_eq!(vm("let x = 2; let y = x * 3; y + 1"), Ok(Value::Int(7)));
+        assert_eq!(vm("let x = 1; x = x + 10; x"), Ok(Value::Int(11)));
+        assert_eq!(vm("let x = 1; let x = x + 1; x"), Ok(Value::Int(2)));
     }
 
     #[test]
     fn local_variables() {
-        assert_eq!(agree("{ let a = 1; let b = 2; a + b }"), Ok(Value::Int(3)));
+        assert_eq!(vm("{ let a = 1; let b = 2; a + b }"), Ok(Value::Int(3)));
+        assert_eq!(vm("{ let a = 1; { let b = 2; a + b } }"), Ok(Value::Int(3)));
+        assert_eq!(vm("let x = 1; { let x = x + 1; x }"), Ok(Value::Int(2)));
+        assert_eq!(vm("let x = 1; { let x = 2; x = 3; } x"), Ok(Value::Int(1)));
         assert_eq!(
-            agree("{ let a = 1; { let b = 2; a + b } }"),
-            Ok(Value::Int(3))
-        );
-        assert_eq!(agree("let x = 1; { let x = x + 1; x }"), Ok(Value::Int(2)));
-        assert_eq!(
-            agree("let x = 1; { let x = 2; x = 3; } x"),
-            Ok(Value::Int(1))
-        );
-        assert_eq!(
-            agree("let x = 1; { let y = 2; x = x + y; } x"),
+            vm("let x = 1; { let y = 2; x = x + y; } x"),
             Ok(Value::Int(3))
         );
         assert_eq!(
-            agree("let x = 1; let y = { let x = 2; x }; x + y"),
+            vm("let x = 1; let y = { let x = 2; x }; x + y"),
             Ok(Value::Int(3))
         );
-        assert_eq!(
-            agree("let x = 1; if true { let x = 2; } x"),
-            Ok(Value::Int(1))
-        );
+        assert_eq!(vm("let x = 1; if true { let x = 2; } x"), Ok(Value::Int(1)));
     }
 
     #[test]
     fn locals_below_temporaries() {
+        assert_eq!(vm("1 + { let a = 2; let b = 3; a * b }"), Ok(Value::Int(7)));
         assert_eq!(
-            agree("1 + { let a = 2; let b = 3; a * b }"),
-            Ok(Value::Int(7))
-        );
-        assert_eq!(
-            agree("let x = 5; if x > 3 { let y = x * 2; y } else { 0 }"),
+            vm("let x = 5; if x > 3 { let y = x * 2; y } else { 0 }"),
             Ok(Value::Int(10))
         );
     }
@@ -324,7 +300,7 @@ mod tests {
     #[test]
     fn locals_dropped_after_block() {
         assert_eq!(
-            agree("{ let a = 1; } { let b = 2; } { let c = 3; c }"),
+            vm("{ let a = 1; } { let b = 2; } { let c = 3; c }"),
             Ok(Value::Int(3))
         );
     }
@@ -332,12 +308,12 @@ mod tests {
     #[test]
     fn while_loops() {
         assert_eq!(
-            agree("let i = 0; let sum = 0; while i < 5 { i = i + 1; sum = sum + i; } sum"),
+            vm("let i = 0; let sum = 0; while i < 5 { i = i + 1; sum = sum + i; } sum"),
             Ok(Value::Int(15))
         );
-        assert_eq!(agree("while false { 1 }"), Ok(Value::Unit));
+        assert_eq!(vm("while false { 1 }"), Ok(Value::Unit));
         assert_eq!(
-            agree("let i = 0; while i < 3 { let j = i; i = j + 1; } i"),
+            vm("let i = 0; while i < 3 { let j = i; i = j + 1; } i"),
             Ok(Value::Int(3))
         );
     }
@@ -345,80 +321,70 @@ mod tests {
     #[test]
     fn break_and_continue() {
         assert_eq!(
-            agree("let i = 0; while true { i = i + 1; if i == 4 { break; } } i"),
+            vm("let i = 0; while true { i = i + 1; if i == 4 { break; } } i"),
             Ok(Value::Int(4))
         );
         assert_eq!(
-            agree(
-                "let i = 0; let sum = 0;
+            vm("let i = 0; let sum = 0;
                  while i < 5 { i = i + 1; if i == 3 { continue; } sum = sum + i; }
-                 sum"
-            ),
+                 sum"),
             Ok(Value::Int(12))
         );
-        assert_eq!(agree("while true { break; }"), Ok(Value::Unit));
+        assert_eq!(vm("while true { break; }"), Ok(Value::Unit));
     }
 
     #[test]
     fn break_leaves_only_inner_loop() {
         assert_eq!(
-            agree(
-                "let i = 0; let count = 0;
+            vm("let i = 0; let count = 0;
                  while i < 3 {
                      i = i + 1;
                      let j = 0;
                      while true { j = j + 1; if j == 2 { break; } count = count + 1; }
                  }
-                 count"
-            ),
+                 count"),
             Ok(Value::Int(3))
         );
     }
 
     #[test]
     fn break_and_continue_clean_up_stacks() {
-        assert_eq!(agree("while true { 1 + break; };"), Ok(Value::Unit));
+        assert_eq!(vm("while true { 1 + break; };"), Ok(Value::Unit));
         assert_eq!(
-            agree("let i = 0; while i < 3 { i = i + 1; 2 * { let a = i; continue; }; };"),
+            vm("let i = 0; while i < 3 { i = i + 1; 2 * { let a = i; continue; }; };"),
             Ok(Value::Unit)
         );
         assert_eq!(
-            agree("while true { let a = 1; { let b = 2; break; } } { let c = 3; c }"),
+            vm("while true { let a = 1; { let b = 2; break; } } { let c = 3; c }"),
             Ok(Value::Int(3))
         );
         assert_eq!(
-            agree("let i = 0; while i < 3 { let a = i; i = i + 1; continue; } { let c = 7; c }"),
+            vm("let i = 0; while i < 3 { let a = i; i = i + 1; continue; } { let c = 7; c }"),
             Ok(Value::Int(7))
         );
     }
 
     #[test]
     fn functions() {
-        assert_eq!(agree("fn add(a, b) { a + b } add(1, 2)"), Ok(Value::Int(3)));
-        assert_eq!(agree("fn f() {} f()"), Ok(Value::Unit));
+        assert_eq!(vm("fn add(a, b) { a + b } add(1, 2)"), Ok(Value::Int(3)));
+        assert_eq!(vm("fn f() {} f()"), Ok(Value::Unit));
         assert_eq!(
-            agree("fn fact(n) { if n <= 1 { 1 } else { n * fact(n - 1) } } fact(10)"),
+            vm("fn fact(n) { if n <= 1 { 1 } else { n * fact(n - 1) } } fact(10)"),
             Ok(Value::Int(3628800))
         );
         assert_eq!(
-            agree("fn f(x) { let y = x * 2; y + 1 } let a = 1; f(5) + a"),
+            vm("fn f(x) { let y = x * 2; y + 1 } let a = 1; f(5) + a"),
             Ok(Value::Int(12))
         );
-        assert_eq!(agree("fn f() {}"), Ok(Value::Unit));
-        assert_eq!(
-            agree("fn f() { 1 } { let y = 2; f() + y }"),
-            Ok(Value::Int(3))
-        );
+        assert_eq!(vm("fn f() {}"), Ok(Value::Unit));
+        assert_eq!(vm("fn f() { 1 } { let y = 2; f() + y }"), Ok(Value::Int(3)));
     }
 
     #[test]
     fn parameters_and_locals_are_separate_from_outer_variables() {
+        assert_eq!(vm("let x = 1; fn f(x) { x } f(2) + x"), Ok(Value::Int(3)));
         assert_eq!(
-            agree("let x = 1; fn f(x) { x } f(2) + x"),
-            Ok(Value::Int(3))
-        );
-        assert_eq!(
-            agree("let x = 1; fn f() { let x = 2; x } f() + x"),
+            vm("let x = 1; fn f() { let x = 2; x } f() + x"),
             Ok(Value::Int(3))
         );
     }
@@ -426,11 +392,9 @@ mod tests {
     #[test]
     fn mutual_recursion() {
         assert_eq!(
-            agree(
-                "fn even(n) { if n == 0 { true } else { odd(n - 1) } }
+            vm("fn even(n) { if n == 0 { true } else { odd(n - 1) } }
                  fn odd(n) { if n == 0 { false } else { even(n - 1) } }
-                 even(10)"
-            ),
+                 even(10)"),
             Ok(Value::Bool(true))
         );
     }
@@ -443,22 +407,22 @@ mod tests {
     #[test]
     fn return_from_function() {
         assert_eq!(
-            agree("fn abs(x) { if x < 0 { return -x; } x } abs(-5) + abs(3)"),
+            vm("fn abs(x) { if x < 0 { return -x; } x } abs(-5) + abs(3)"),
             Ok(Value::Int(8))
         );
         assert_eq!(
-            agree(
+            vm(
                 "fn root(n) { let i = 0; while true { if i * i >= n { return i; } i = i + 1; } } root(50)"
             ),
             Ok(Value::Int(8))
         );
-        assert_eq!(agree("fn f() { return; 1 } f()"), Ok(Value::Unit));
+        assert_eq!(vm("fn f() { return; 1 } f()"), Ok(Value::Unit));
         assert_eq!(
-            agree("fn sign(x) { if x < 0 { return -1 } 1 } sign(-3)"),
+            vm("fn sign(x) { if x < 0 { return -1 } 1 } sign(-3)"),
             Ok(Value::Int(-1))
         );
         assert_eq!(
-            agree("fn g() { return 1; } fn f() { g() + 1 } f()"),
+            vm("fn g() { return 1; } fn f() { g() + 1 } f()"),
             Ok(Value::Int(2))
         );
         assert_eq!(output("fn f() { print(1); return; print(2); } f();"), "1\n");
@@ -466,16 +430,13 @@ mod tests {
 
     #[test]
     fn return_cleans_up_stacks() {
+        assert_eq!(vm("fn f() { 1 + return 2; } 10 + f()"), Ok(Value::Int(12)));
         assert_eq!(
-            agree("fn f() { 1 + return 2; } 10 + f()"),
-            Ok(Value::Int(12))
-        );
-        assert_eq!(
-            agree("fn f() { let a = 1; { let b = 2; return a + b; } } let x = 5; f() + x"),
+            vm("fn f() { let a = 1; { let b = 2; return a + b; } } let x = 5; f() + x"),
             Ok(Value::Int(8))
         );
         assert_eq!(
-            agree("fn f() { { { return 1; } } } { let y = 2; f() + y }"),
+            vm("fn f() { { { return 1; } } } { let y = 2; f() + y }"),
             Ok(Value::Int(3))
         );
     }
@@ -483,11 +444,11 @@ mod tests {
     #[test]
     fn functions_are_values() {
         assert_eq!(
-            agree("fn add(a, b) { a + b } let plus = add; plus(1, 2)"),
+            vm("fn add(a, b) { a + b } let plus = add; plus(1, 2)"),
             Ok(Value::Int(3))
         );
         assert_eq!(
-            agree("fn twice(f, x) { f(f(x)) } fn inc(x) { x + 1 } twice(inc, 5)"),
+            vm("fn twice(f, x) { f(f(x)) } fn inc(x) { x + 1 } twice(inc, 5)"),
             Ok(Value::Int(7))
         );
         assert_eq!(output("fn add(a, b) { a + b } print(add);"), "<fn add>\n");
@@ -495,8 +456,8 @@ mod tests {
 
     #[test]
     fn variables_shadow_functions() {
-        assert_eq!(agree("fn f() { 1 } let f = 2; f"), Ok(Value::Int(2)));
-        assert_eq!(agree("fn f() { 1 } fn g(f) { f } g(5)"), Ok(Value::Int(5)));
+        assert_eq!(vm("fn f() { 1 } let f = 2; f"), Ok(Value::Int(2)));
+        assert_eq!(vm("fn f() { 1 } fn g(f) { f } g(5)"), Ok(Value::Int(5)));
     }
 
     #[test]
@@ -574,7 +535,6 @@ mod tests {
         assert_eq!(error("-false"), "1:1: expected integer, got false");
         assert_eq!(error("false < true"), "1:7: expected integer, got false");
         assert_eq!(error("true && print(1)"), "1:6: expected bool, got ()");
-        // The engines represent functions differently, so compare on the VM only.
         assert_eq!(
             vm("fn f() {} f == f").unwrap_err().to_string(),
             "1:13: cannot compare <fn f> with <fn f>"
@@ -612,7 +572,7 @@ mod tests {
 
     #[test]
     fn output_before_error_is_kept() {
-        let (result, out) = run_both("print(1); print(1 / 0);");
+        let (result, out) = run("print(1); print(1 / 0);");
         assert_eq!(result.unwrap_err().to_string(), "1:19: division by zero");
         assert_eq!(out, "1\n");
     }

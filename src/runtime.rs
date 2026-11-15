@@ -21,8 +21,6 @@ impl fmt::Display for RuntimeError {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeErrorKind {
-    UndefinedVariable(String),
-    UndefinedFunction(String),
     ArgumentCount {
         name: String,
         expected: usize,
@@ -48,8 +46,6 @@ impl RuntimeErrorKind {
 impl fmt::Display for RuntimeErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RuntimeErrorKind::UndefinedVariable(name) => write!(f, "undefined variable: {name}"),
-            RuntimeErrorKind::UndefinedFunction(name) => write!(f, "undefined function: {name}"),
             RuntimeErrorKind::ArgumentCount {
                 name,
                 expected,

@@ -1,7 +1,6 @@
 use std::fmt;
 use std::rc::Rc;
 
-use crate::ast::FnDecl;
 use crate::chunk::Function;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -9,8 +8,7 @@ pub enum Value {
     Int(i64),
     Bool(bool),
     Unit,
-    Function(Rc<FnDecl>),
-    VmFunction(Rc<Function>),
+    Function(Rc<Function>),
 }
 
 impl fmt::Display for Value {
@@ -19,8 +17,7 @@ impl fmt::Display for Value {
             Value::Int(n) => write!(f, "{n}"),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Unit => write!(f, "()"),
-            Value::Function(decl) => write!(f, "<fn {}>", decl.name),
-            Value::VmFunction(function) => write!(f, "<fn {}>", function.name),
+            Value::Function(function) => write!(f, "<fn {}>", function.name),
         }
     }
 }

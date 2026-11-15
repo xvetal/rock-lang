@@ -1,5 +1,4 @@
 use std::fmt;
-use std::rc::Rc;
 
 use crate::ast::{BinaryOp, Block, Expr, ExprKind, FnDecl, LogicalOp, Program, Stmt, UnaryOp};
 use crate::lexer::{Located, Pos, Token};
@@ -141,12 +140,12 @@ impl Parser {
         self.in_fn = true;
         let body = self.block()?;
         self.in_fn = false;
-        Ok(Stmt::Fn(Rc::new(FnDecl {
+        Ok(Stmt::Fn(FnDecl {
             name,
             pos,
             params,
             body,
-        })))
+        }))
     }
 
     fn assign_stmt(&mut self, name: String) -> Result<Stmt, ParseError> {
@@ -510,7 +509,6 @@ mod tests {
                 strip(value);
             }
             Stmt::Fn(decl) => {
-                let decl = Rc::get_mut(decl).expect("a freshly parsed declaration is not shared");
                 decl.pos = NO_POS;
                 strip_block(&mut decl.body);
             }
@@ -615,12 +613,12 @@ mod tests {
         let ExprKind::Block(body) = body.kind else {
             panic!("function body must be a block");
         };
-        Stmt::Fn(Rc::new(FnDecl {
+        Stmt::Fn(FnDecl {
             name: name.to_string(),
             pos: NO_POS,
             params: params.iter().map(|p| p.to_string()).collect(),
             body,
-        }))
+        })
     }
 
     fn while_expr(cond: Expr, body: Expr) -> Expr {

@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use crate::lexer::Pos;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,7 +94,7 @@ pub struct FnDecl {
 pub enum Stmt {
     Let { name: String, value: Expr },
     Assign { name: String, value: Expr, pos: Pos },
-    Fn(Rc<FnDecl>),
+    Fn(FnDecl),
     Expr(Expr),
 }
 

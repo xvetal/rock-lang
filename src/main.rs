@@ -1,9 +1,6 @@
 mod ast;
 mod chunk;
 mod compiler;
-// Kept only as the reference the VM tests compare against.
-#[cfg_attr(not(test), allow(dead_code))]
-mod interp;
 mod lexer;
 mod parser;
 mod runtime;
@@ -18,9 +15,12 @@ use std::process::ExitCode;
 use std::thread;
 
 use compiler::Scope;
-use interp::STACK_SIZE;
 use value::Value;
 use vm::Vm;
+
+// The parser and the compiler are recursive, so deeply nested input
+// needs a bigger stack than the default 8 MB main thread.
+const STACK_SIZE: usize = 256 * 1024 * 1024;
 
 fn main() -> ExitCode {
     thread::Builder::new()
