@@ -39,7 +39,7 @@ pub enum RuntimeErrorKind {
 }
 
 impl RuntimeErrorKind {
-    fn at(self, pos: Pos) -> RuntimeError {
+    pub fn at(self, pos: Pos) -> RuntimeError {
         RuntimeError { kind: self, pos }
     }
 }
@@ -304,14 +304,14 @@ impl<W: Write> Interpreter<W> {
     }
 }
 
-fn unary(op: &UnaryOp, value: Value) -> Result<Value, RuntimeErrorKind> {
+pub fn unary(op: &UnaryOp, value: Value) -> Result<Value, RuntimeErrorKind> {
     match op {
         UnaryOp::Neg => checked(int(value)?.checked_neg()),
         UnaryOp::Not => Ok(Value::Bool(!boolean(value)?)),
     }
 }
 
-fn binary(op: &BinaryOp, l: Value, r: Value) -> Result<Value, RuntimeErrorKind> {
+pub fn binary(op: &BinaryOp, l: Value, r: Value) -> Result<Value, RuntimeErrorKind> {
     match op {
         BinaryOp::Eq => Ok(Value::Bool(equal(l, r)?)),
         BinaryOp::Ne => Ok(Value::Bool(!equal(l, r)?)),
@@ -351,7 +351,7 @@ fn int(value: Value) -> Result<i64, RuntimeErrorKind> {
     }
 }
 
-fn boolean(value: Value) -> Result<bool, RuntimeErrorKind> {
+pub fn boolean(value: Value) -> Result<bool, RuntimeErrorKind> {
     match value {
         Value::Bool(b) => Ok(b),
         found => Err(RuntimeErrorKind::TypeMismatch {

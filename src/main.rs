@@ -1,8 +1,15 @@
 mod ast;
+// Not wired into the CLI until the VM supports the whole language.
+#[cfg_attr(not(test), allow(dead_code))]
+mod chunk;
+#[cfg_attr(not(test), allow(dead_code))]
+mod compiler;
 mod interp;
 mod lexer;
 mod parser;
 mod value;
+#[cfg_attr(not(test), allow(dead_code))]
+mod vm;
 
 use std::env;
 use std::fs;
