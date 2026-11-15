@@ -1167,6 +1167,7 @@ mod tests {
         ] {
             assert_eq!(parse_type(source).unwrap().to_string(), source);
         }
+        assert_eq!(Type::Never.to_string(), "!");
     }
 
     #[test]

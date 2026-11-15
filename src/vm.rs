@@ -150,12 +150,14 @@ impl<W: Write> Vm<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::checker::{Env, check};
     use crate::compiler::{Scope, compile};
     use crate::lexer::tokenize;
     use crate::parser::Parser;
 
     fn run(input: &str) -> (Result<Value, RuntimeError>, String) {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
+        check(&program, &Env::default()).unwrap();
         let bytecode = compile(&program, &Scope::default()).unwrap();
         let mut out = Vec::new();
         let result = Vm::new(&mut out).run(&bytecode);
@@ -174,22 +176,18 @@ mod tests {
         vm(input).unwrap_err().to_string()
     }
 
-    fn compile_error(input: &str) -> String {
-        let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        compile(&program, &Scope::default())
-            .unwrap_err()
-            .to_string()
-    }
-
     fn session(lines: &[&str]) -> Vec<Result<Value, String>> {
         let mut vm = Vm::new(Vec::new());
+        let mut env = Env::default();
         let mut scope = Scope::default();
         lines
             .iter()
             .map(|line| {
                 let program = Parser::new(tokenize(line).unwrap()).parse().unwrap();
+                let checked = check(&program, &env).map_err(|e| e.to_string())?;
                 let bytecode = compile(&program, &scope).map_err(|e| e.to_string())?;
                 let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
+                env = checked;
                 scope = bytecode.scope;
                 Ok(value)
             })
@@ -249,7 +247,7 @@ mod tests {
             vm("if false { 1 } else if false { 2 } else { 3 }"),
             Ok(Value::Int(3))
         );
-        assert_eq!(vm("if false { 1 }"), Ok(Value::Unit));
+        assert_eq!(vm("if false { 1; }"), Ok(Value::Unit));
         assert_eq!(vm("if false { 1 / 0 } else { 2 }"), Ok(Value::Int(2)));
         assert_eq!(output("if true { print(1); } else { print(2); }"), "1\n");
     }
@@ -261,7 +259,7 @@ mod tests {
         assert_eq!(vm("{}"), Ok(Value::Unit));
         assert_eq!(vm("1; 2;"), Ok(Value::Unit));
         assert_eq!(vm(""), Ok(Value::Unit));
-        assert_eq!(vm("if true { 1 } 2"), Ok(Value::Int(2)));
+        assert_eq!(vm("if true { 1; } 2"), Ok(Value::Int(2)));
     }
 
     #[test]
@@ -311,7 +309,7 @@ mod tests {
             vm("let i = 0; let sum = 0; while i < 5 { i = i + 1; sum = sum + i; } sum"),
             Ok(Value::Int(15))
         );
-        assert_eq!(vm("while false { 1 }"), Ok(Value::Unit));
+        assert_eq!(vm("while false { 1; }"), Ok(Value::Unit));
         assert_eq!(
             vm("let i = 0; while i < 3 { let j = i; i = j + 1; } i"),
             Ok(Value::Int(3))
@@ -423,7 +421,7 @@ mod tests {
         );
         assert_eq!(
             vm(
-                "fn root(n: int) -> int { let i = 0; while true { if i * i >= n { return i; } i = i + 1; } } root(50)"
+                "fn root(n: int) -> int { let i = 0; while true { if i * i >= n { return i; } i = i + 1; } 0 } root(50)"
             ),
             Ok(Value::Int(8))
         );
@@ -494,7 +492,10 @@ mod tests {
     fn print() {
         assert_eq!(output("let x = 1 + 2 * 3; print(x);"), "7\n");
         assert_eq!(output("print(false); print(print(1));"), "false\n1\n()\n");
-        assert_eq!(output("false && print(1); true || print(2);"), "");
+        assert_eq!(
+            output("false && { print(1); true }; true || { print(2); true };"),
+            ""
+        );
         assert_eq!(
             output("let i = 0; while i < 3 { print(i); i = i + 1; }"),
             "0\n1\n2\n"
@@ -547,24 +548,37 @@ mod tests {
     }
 
     #[test]
+    fn session_keeps_types() {
+        assert_eq!(
+            session(&[
+                "fn f() -> int { 1 }",
+                "fn g() -> int { f() }",
+                "let x = f() == 1;",
+                "fn f() -> bool { true }",
+                "g() + 1",
+                "x + 1",
+                "f() + 1",
+            ]),
+            [
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Ok(Value::Int(2)),
+                Err("1:1: expected int, found bool".to_string()),
+                Err("1:1: expected int, found bool".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn errors() {
-        assert_eq!(error("1 +\n  true"), "1:3: expected integer, got true");
         assert_eq!(error("10 / (2 - 2)"), "1:4: division by zero");
         assert_eq!(error("9223372036854775807 + 1"), "1:21: integer overflow");
-        assert_eq!(error("!1"), "1:1: expected bool, got 1");
-        assert_eq!(error("1 == true"), "1:3: cannot compare 1 with true");
-        assert_eq!(error("true && 1"), "1:6: expected bool, got 1");
-        assert_eq!(error("1 || true"), "1:3: expected bool, got 1");
-        assert_eq!(error("if 1 { 2 }"), "1:4: expected bool, got 1");
         assert_eq!(error("{ 1 / 0; 2 }"), "1:5: division by zero");
-        assert_eq!(error("while 1 { 2 }"), "1:7: expected bool, got 1");
-        assert_eq!(error("print(1) + 1"), "1:10: expected integer, got ()");
-        assert_eq!(error("-false"), "1:1: expected integer, got false");
-        assert_eq!(error("false < true"), "1:7: expected integer, got false");
-        assert_eq!(error("true && print(1)"), "1:6: expected bool, got ()");
         assert_eq!(
-            vm("fn f() {} f == f").unwrap_err().to_string(),
-            "1:13: cannot compare <fn f> with <fn f>"
+            error("fn f() -> int {\n  1 / 0\n}\nf()"),
+            "2:5: division by zero"
         );
     }
 
@@ -581,23 +595,6 @@ mod tests {
         );
         assert_eq!(error("--9223372036854775808"), "1:1: integer overflow");
         assert_eq!(error("-9223372036854775808 / -1"), "1:22: integer overflow");
-    }
-
-    #[test]
-    fn call_errors() {
-        assert_eq!(
-            error("fn add(a: int, b: int) -> int { a + b } add(1)"),
-            "1:41: add expects 2 arguments, got 1"
-        );
-        assert_eq!(error("let f = 2; f()"), "1:12: expected function, got 2");
-        assert_eq!(
-            error("let print = 1; print(2)"),
-            "1:16: expected function, got 1"
-        );
-        assert_eq!(
-            error("fn f() -> int {\n  1 / 0\n}\nf()"),
-            "2:5: division by zero"
-        );
     }
 
     #[test]
@@ -622,70 +619,6 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "1:50: stack overflow: more than 1000 nested calls"
-        );
-    }
-
-    #[test]
-    fn runtime_error_through_variable() {
-        assert_eq!(
-            error("let x = true;\nx + 1"),
-            "2:3: expected integer, got true"
-        );
-    }
-
-    #[test]
-    fn undefined_variables_are_compile_errors() {
-        assert_eq!(compile_error("x"), "1:1: undefined variable: x");
-        assert_eq!(compile_error("y = 1;"), "1:1: undefined variable: y");
-        assert_eq!(
-            compile_error("{ let a = 1; } a"),
-            "1:16: undefined variable: a"
-        );
-        assert_eq!(compile_error("let x = x;"), "1:9: undefined variable: x");
-        assert_eq!(
-            compile_error("let y = x; let x = 1; y"),
-            "1:9: undefined variable: x"
-        );
-    }
-
-    #[test]
-    fn functions_do_not_see_outer_variables() {
-        assert_eq!(
-            compile_error("let base = 10; fn f(x: int) -> int { base + x } f(1)"),
-            "1:38: undefined variable: base"
-        );
-        assert_eq!(
-            compile_error("fn f() -> int { y } { let y = 1; f() }"),
-            "1:17: undefined variable: y"
-        );
-        assert_eq!(
-            compile_error("let count = 0; fn reset() { count = 0; }"),
-            "1:29: undefined variable: count"
-        );
-    }
-
-    #[test]
-    fn function_compile_errors() {
-        assert_eq!(compile_error("f()"), "1:1: undefined function: f");
-        assert_eq!(
-            compile_error("fn f() {} fn f() {}"),
-            "1:14: duplicate function: f"
-        );
-        assert_eq!(
-            compile_error("fn f() {} f = 1;"),
-            "1:11: undefined variable: f"
-        );
-        assert_eq!(
-            compile_error("print(1, 2)"),
-            "1:1: print expects 1 argument, got 2"
-        );
-    }
-
-    #[test]
-    fn undefined_variable_in_unreached_code_is_an_error() {
-        assert_eq!(
-            compile_error("if false { y }"),
-            "1:12: undefined variable: y"
         );
     }
 

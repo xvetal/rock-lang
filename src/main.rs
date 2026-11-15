@@ -1,4 +1,5 @@
 mod ast;
+mod checker;
 mod chunk;
 mod compiler;
 mod lexer;
@@ -14,6 +15,7 @@ use std::panic;
 use std::process::ExitCode;
 use std::thread;
 
+use checker::Env;
 use compiler::Scope;
 use value::Value;
 use vm::Vm;
@@ -49,6 +51,7 @@ fn cli() -> ExitCode {
 fn repl() {
     let stdin = io::stdin();
     let mut line = String::new();
+    let mut env = Env::default();
     let mut scope = Scope::default();
     let mut vm = Vm::new(io::stdout());
     loop {
@@ -69,13 +72,18 @@ fn repl() {
             continue;
         }
 
-        report(run(&mut vm, &mut scope, &line));
+        report(run(&mut vm, &mut env, &mut scope, &line));
     }
 }
 
 fn run_file(path: &str) -> Result<Value, String> {
     let source = fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
-    run(&mut Vm::new(io::stdout()), &mut Scope::default(), &source)
+    run(
+        &mut Vm::new(io::stdout()),
+        &mut Env::default(),
+        &mut Scope::default(),
+        &source,
+    )
 }
 
 fn report(result: Result<Value, String>) -> ExitCode {
@@ -92,13 +100,20 @@ fn report(result: Result<Value, String>) -> ExitCode {
     }
 }
 
-fn run(vm: &mut Vm<io::Stdout>, scope: &mut Scope, source: &str) -> Result<Value, String> {
+fn run(
+    vm: &mut Vm<io::Stdout>,
+    env: &mut Env,
+    scope: &mut Scope,
+    source: &str,
+) -> Result<Value, String> {
     let tokens = lexer::tokenize(source)?;
     let program = parser::Parser::new(tokens)
         .parse()
         .map_err(|e| e.to_string())?;
+    let checked = checker::check(&program, env).map_err(|e| e.to_string())?;
     let bytecode = compiler::compile(&program, scope).map_err(|e| e.to_string())?;
     let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
+    *env = checked;
     *scope = bytecode.scope;
     Ok(value)
 }

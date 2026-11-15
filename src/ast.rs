@@ -89,6 +89,8 @@ pub enum Type {
     Int,
     Bool,
     Unit,
+    // The type of `return`, `break` and `continue`; programs cannot write it.
+    Never,
     Fn { params: Vec<Type>, ret: Box<Type> },
 }
 
@@ -98,6 +100,7 @@ impl fmt::Display for Type {
             Type::Int => write!(f, "int"),
             Type::Bool => write!(f, "bool"),
             Type::Unit => write!(f, "()"),
+            Type::Never => write!(f, "!"),
             Type::Fn { params, ret } => {
                 write!(f, "fn(")?;
                 for (i, param) in params.iter().enumerate() {
@@ -129,6 +132,15 @@ pub struct FnDecl {
     pub params: Vec<Param>,
     pub ret: Type,
     pub body: Block,
+}
+
+impl FnDecl {
+    pub fn ty(&self) -> Type {
+        Type::Fn {
+            params: self.params.iter().map(|p| p.ty.clone()).collect(),
+            ret: Box::new(self.ret.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -2,8 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- Programs are type-checked before they run: mismatched types, wrong argument counts and calls of non-functions are reported with their position, even in code that is never reached. The REPL remembers the types of earlier lines
+
 ### Changed
 - Function parameters need type annotations, and functions declare their return type, e.g. `fn add(a: int, b: int) -> int`; without `->` a function returns `()`. Types are `int`, `bool`, `()` and function types such as `fn(int) -> int`
+- `if` without `else` and `while` bodies must have type `()`, e.g. `if c { 1 }` is now an error; write `if c { 1; }`
 
 ## [0.7.0] - 2026-11-15
 
