@@ -33,7 +33,6 @@ pub struct Chunk {
 #[derive(Debug, PartialEq)]
 pub struct Function {
     pub name: String,
-    pub arity: usize,
     pub chunk: Chunk,
 }
 

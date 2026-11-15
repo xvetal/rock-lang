@@ -1,48 +1,8 @@
-use std::fmt;
 use std::rc::Rc;
 
 use crate::ast::{Block, Expr, ExprKind, FnDecl, LogicalOp, Program, Stmt};
 use crate::chunk::{Bytecode, Chunk, Function, Op};
 use crate::lexer::Pos;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CompileError {
-    pub kind: CompileErrorKind,
-    pub pos: Pos,
-}
-
-impl fmt::Display for CompileError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}: {}", self.pos, self.kind)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum CompileErrorKind {
-    UndefinedVariable(String),
-    UndefinedFunction(String),
-    DuplicateFunction(String),
-    PrintArgumentCount(usize),
-}
-
-impl CompileErrorKind {
-    fn at(self, pos: Pos) -> CompileError {
-        CompileError { kind: self, pos }
-    }
-}
-
-impl fmt::Display for CompileErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CompileErrorKind::UndefinedVariable(name) => write!(f, "undefined variable: {name}"),
-            CompileErrorKind::UndefinedFunction(name) => write!(f, "undefined function: {name}"),
-            CompileErrorKind::DuplicateFunction(name) => write!(f, "duplicate function: {name}"),
-            CompileErrorKind::PrintArgumentCount(found) => {
-                write!(f, "print expects 1 argument, got {found}")
-            }
-        }
-    }
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct Scope {
@@ -50,7 +10,7 @@ pub struct Scope {
     functions: Vec<String>,
 }
 
-pub fn compile(program: &Program, scope: &Scope) -> Result<Bytecode, CompileError> {
+pub fn compile(program: &Program, scope: &Scope) -> Bytecode {
     let decls: Vec<&FnDecl> = program
         .stmts
         .iter()
@@ -59,51 +19,42 @@ pub fn compile(program: &Program, scope: &Scope) -> Result<Bytecode, CompileErro
             _ => None,
         })
         .collect();
-    for (i, decl) in decls.iter().enumerate() {
-        if decls[..i].iter().any(|other| other.name == decl.name) {
-            return Err(CompileErrorKind::DuplicateFunction(decl.name.clone()).at(decl.pos));
-        }
-    }
-
     let mut names = scope.functions.clone();
     names.extend(decls.iter().map(|decl| decl.name.clone()));
-    let functions = decls
-        .iter()
-        .map(|decl| function(decl, &names))
-        .collect::<Result<_, _>>()?;
+    let functions = decls.iter().map(|decl| function(decl, &names)).collect();
 
     let mut compiler = Compiler::new(&names, scope.locals.clone());
-    compiler.stmts(&program.stmts)?;
+    compiler.stmts(&program.stmts);
     if let Some(expr) = &program.expr {
-        compiler.expr(expr)?;
+        compiler.expr(expr);
     }
     let main = Function {
         name: "main".to_string(),
-        arity: 0,
         chunk: compiler.chunk,
     };
     let scope = Scope {
         locals: compiler.locals,
         functions: names,
     };
-    Ok(Bytecode {
+    Bytecode {
         main: Rc::new(main),
         functions,
         scope,
+    }
+}
+
+fn function(decl: &FnDecl, names: &[String]) -> Rc<Function> {
+    let params = decl.params.iter().map(|p| p.name.clone()).collect();
+    let mut compiler = Compiler::new(names, params);
+    compiler.block(&decl.body, decl.pos);
+    compiler.chunk.emit(Op::Return, decl.pos);
+    Rc::new(Function {
+        name: decl.name.clone(),
+        chunk: compiler.chunk,
     })
 }
 
-fn function(decl: &FnDecl, names: &[String]) -> Result<Rc<Function>, CompileError> {
-    let params = decl.params.iter().map(|p| p.name.clone()).collect();
-    let mut compiler = Compiler::new(names, params);
-    compiler.block(&decl.body, decl.pos)?;
-    compiler.chunk.emit(Op::Return, decl.pos);
-    Ok(Rc::new(Function {
-        name: decl.name.clone(),
-        arity: decl.params.len(),
-        chunk: compiler.chunk,
-    }))
-}
+const RESOLVED: &str = "the checker resolves every name";
 
 struct Compiler<'a> {
     functions: &'a [String],
@@ -131,36 +82,33 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn stmts(&mut self, stmts: &[Stmt]) -> Result<(), CompileError> {
+    fn stmts(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
             match stmt {
                 Stmt::Let { name, value } => {
-                    self.expr(value)?;
+                    self.expr(value);
                     self.chunk.emit(Op::DefineLocal, value.pos);
                     self.locals.push(name.clone());
                 }
                 Stmt::Assign { name, value, pos } => {
-                    self.expr(value)?;
-                    let slot = self.local(name).ok_or_else(|| {
-                        CompileErrorKind::UndefinedVariable(name.clone()).at(*pos)
-                    })?;
+                    self.expr(value);
+                    let slot = self.local(name).expect(RESOLVED);
                     self.chunk.emit(Op::SetLocal(slot), *pos);
                 }
                 Stmt::Expr(expr) => {
-                    self.expr(expr)?;
+                    self.expr(expr);
                     self.chunk.emit(Op::Pop, expr.pos);
                 }
                 Stmt::Fn(_) => {}
             }
         }
-        Ok(())
     }
 
-    fn block(&mut self, block: &Block, pos: Pos) -> Result<(), CompileError> {
+    fn block(&mut self, block: &Block, pos: Pos) {
         let outer = self.locals.len();
-        self.stmts(&block.stmts)?;
+        self.stmts(&block.stmts);
         match &block.expr {
-            Some(value) => self.expr(value)?,
+            Some(value) => self.expr(value),
             None => {
                 self.chunk.emit(Op::Unit, pos);
             }
@@ -170,7 +118,6 @@ impl<'a> Compiler<'a> {
             self.chunk.emit(Op::DropLocals(count), pos);
             self.locals.truncate(outer);
         }
-        Ok(())
     }
 
     fn local(&self, name: &str) -> Option<usize> {
@@ -185,7 +132,7 @@ impl<'a> Compiler<'a> {
         Some(Op::Function(index))
     }
 
-    fn expr(&mut self, expr: &Expr) -> Result<(), CompileError> {
+    fn expr(&mut self, expr: &Expr) {
         let pos = expr.pos;
         match &expr.kind {
             ExprKind::Int(n) => {
@@ -195,53 +142,49 @@ impl<'a> Compiler<'a> {
                 self.chunk.emit(Op::Bool(*b), pos);
             }
             ExprKind::Var(name) => {
-                let op = self
-                    .lookup(name)
-                    .ok_or_else(|| CompileErrorKind::UndefinedVariable(name.clone()).at(pos))?;
+                let op = self.lookup(name).expect(RESOLVED);
                 self.chunk.emit(op, pos);
             }
             ExprKind::Call { name, args } => {
-                let callee = match self.lookup(name) {
-                    Some(op) => op,
-                    None if name == "print" => return self.print(args, pos),
-                    None => {
-                        return Err(CompileErrorKind::UndefinedFunction(name.clone()).at(pos));
-                    }
+                // The only callee the checker resolves without a declaration
+                // is the built-in `print`.
+                let Some(callee) = self.lookup(name) else {
+                    return self.print(args, pos);
                 };
                 self.chunk.emit(callee, pos);
                 self.temps += 1;
                 for arg in args {
-                    self.expr(arg)?;
+                    self.expr(arg);
                     self.temps += 1;
                 }
                 self.temps -= args.len() + 1;
                 self.chunk.emit(Op::Call(args.len()), pos);
             }
             ExprKind::Unary { op, operand } => {
-                self.expr(operand)?;
+                self.expr(operand);
                 self.chunk.emit(Op::Unary(op.clone()), pos);
             }
             ExprKind::Binary { op, left, right } => {
-                self.expr(left)?;
+                self.expr(left);
                 self.temps += 1;
-                self.expr(right)?;
+                self.expr(right);
                 self.temps -= 1;
                 self.chunk.emit(Op::Binary(op.clone()), pos);
             }
-            ExprKind::Logical { op, left, right } => self.logical(op, left, right, pos)?,
-            ExprKind::Block(block) => self.block(block, pos)?,
+            ExprKind::Logical { op, left, right } => self.logical(op, left, right, pos),
+            ExprKind::Block(block) => self.block(block, pos),
             ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
             } => {
-                self.expr(cond)?;
+                self.expr(cond);
                 let to_else = self.chunk.emit(Op::JumpIfFalse(0), cond.pos);
-                self.block(then_branch, pos)?;
+                self.block(then_branch, pos);
                 let to_end = self.chunk.emit(Op::Jump(0), pos);
                 self.chunk.patch_jump(to_else);
                 match else_branch {
-                    Some(else_branch) => self.expr(else_branch)?,
+                    Some(else_branch) => self.expr(else_branch),
                     None => {
                         self.chunk.emit(Op::Unit, pos);
                     }
@@ -250,7 +193,7 @@ impl<'a> Compiler<'a> {
             }
             ExprKind::While { cond, body } => {
                 let start = self.chunk.code.len();
-                self.expr(cond)?;
+                self.expr(cond);
                 let to_exit = self.chunk.emit(Op::JumpIfFalse(0), cond.pos);
                 self.loops.push(Loop {
                     start,
@@ -258,7 +201,7 @@ impl<'a> Compiler<'a> {
                     locals: self.locals.len(),
                     breaks: Vec::new(),
                 });
-                self.block(body, pos)?;
+                self.block(body, pos);
                 self.chunk.emit(Op::Pop, pos);
                 self.chunk.emit(Op::Jump(start), pos);
                 let innermost = self.loops.pop().expect("pushed above");
@@ -280,7 +223,7 @@ impl<'a> Compiler<'a> {
             }
             ExprKind::Return(value) => {
                 match value {
-                    Some(value) => self.expr(value)?,
+                    Some(value) => self.expr(value),
                     None => {
                         self.chunk.emit(Op::Unit, pos);
                     }
@@ -288,16 +231,14 @@ impl<'a> Compiler<'a> {
                 self.chunk.emit(Op::Return, pos);
             }
         }
-        Ok(())
     }
 
-    fn print(&mut self, args: &[Expr], pos: Pos) -> Result<(), CompileError> {
+    fn print(&mut self, args: &[Expr], pos: Pos) {
         let [value] = args else {
-            return Err(CompileErrorKind::PrintArgumentCount(args.len()).at(pos));
+            panic!("the checker gives print exactly one argument");
         };
-        self.expr(value)?;
+        self.expr(value);
         self.chunk.emit(Op::Print, pos);
-        Ok(())
     }
 
     fn innermost_loop(&mut self) -> &mut Loop {
@@ -318,19 +259,13 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    // Both operands must be bools: every operand goes through JumpIfFalse,
-    // which reports a type error for anything else.
-    fn logical(
-        &mut self,
-        op: &LogicalOp,
-        left: &Expr,
-        right: &Expr,
-        pos: Pos,
-    ) -> Result<(), CompileError> {
+    // The checker makes both operands bools, so every operand can go
+    // through JumpIfFalse.
+    fn logical(&mut self, op: &LogicalOp, left: &Expr, right: &Expr, pos: Pos) {
         let mut to_false = Vec::new();
         let mut to_true = Vec::new();
 
-        self.expr(left)?;
+        self.expr(left);
         let left_false = self.chunk.emit(Op::JumpIfFalse(0), pos);
         match op {
             LogicalOp::And => to_false.push(left_false),
@@ -340,7 +275,7 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        self.expr(right)?;
+        self.expr(right);
         to_false.push(self.chunk.emit(Op::JumpIfFalse(0), pos));
         to_true.push(self.chunk.emit(Op::Jump(0), pos));
 
@@ -354,7 +289,6 @@ impl<'a> Compiler<'a> {
         }
         self.chunk.emit(Op::Bool(true), pos);
         self.chunk.patch_jump(to_end);
-        Ok(())
     }
 }
 
@@ -362,17 +296,14 @@ impl<'a> Compiler<'a> {
 mod tests {
     use super::*;
     use crate::ast::BinaryOp::{Add, Mul};
+    use crate::checker::{Env, check};
     use crate::lexer::tokenize;
     use crate::parser::Parser;
 
     fn code(input: &str) -> Vec<Op> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        compile(&program, &Scope::default())
-            .unwrap()
-            .main
-            .chunk
-            .code
-            .clone()
+        check(&program, &Env::default()).unwrap();
+        compile(&program, &Scope::default()).main.chunk.code.clone()
     }
 
     #[test]
@@ -411,12 +342,14 @@ mod tests {
     #[test]
     fn if_without_else_is_unit() {
         assert_eq!(
-            code("if true { 1 }"),
+            code("if true { 1; }"),
             [
                 Op::Bool(true),
-                Op::JumpIfFalse(4),
+                Op::JumpIfFalse(6),
                 Op::Int(1),
-                Op::Jump(5),
+                Op::Pop,
+                Op::Unit,
+                Op::Jump(7),
                 Op::Unit
             ]
         );
@@ -595,7 +528,7 @@ mod tests {
             Parser::new(tokenize("fn add(a: int, b: int) -> int { let c = a + b; c }").unwrap())
                 .parse()
                 .unwrap();
-        let bytecode = compile(&program, &Scope::default()).unwrap();
+        let bytecode = compile(&program, &Scope::default());
         assert_eq!(
             bytecode.functions[0].chunk.code,
             [
@@ -618,7 +551,7 @@ mod tests {
     #[test]
     fn positions_follow_code() {
         let program = Parser::new(tokenize("1 +\n  2").unwrap()).parse().unwrap();
-        let bytecode = compile(&program, &Scope::default()).unwrap();
+        let bytecode = compile(&program, &Scope::default());
         let positions: Vec<String> = bytecode
             .main
             .chunk

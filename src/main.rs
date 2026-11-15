@@ -111,7 +111,7 @@ fn run(
         .parse()
         .map_err(|e| e.to_string())?;
     let checked = checker::check(&program, env).map_err(|e| e.to_string())?;
-    let bytecode = compiler::compile(&program, scope).map_err(|e| e.to_string())?;
+    let bytecode = compiler::compile(&program, scope);
     let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
     *env = checked;
     *scope = bytecode.scope;

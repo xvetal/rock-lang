@@ -3,7 +3,7 @@ use std::mem;
 use std::rc::Rc;
 
 use crate::chunk::{Bytecode, Function, Op};
-use crate::runtime::{MAX_CALL_DEPTH, RuntimeError, RuntimeErrorKind, binary, boolean, unary};
+use crate::runtime::{MAX_CALL_DEPTH, RuntimeError, RuntimeErrorKind, binary, unary};
 use crate::value::Value;
 
 pub struct Vm<W: Write> {
@@ -82,7 +82,7 @@ impl<W: Write> Vm<W> {
                 }
                 Op::Jump(target) => frame.ip = target,
                 Op::JumpIfFalse(target) => {
-                    if !boolean(self.pop()).map_err(at)? {
+                    if !self.pop().as_bool() {
                         frame.ip = target;
                     }
                 }
@@ -92,22 +92,10 @@ impl<W: Write> Vm<W> {
                 }
                 Op::Call(argc) => {
                     let args = self.stack.len() - argc;
-                    let function = match &self.stack[args - 1] {
-                        Value::Function(function) => Rc::clone(function),
-                        found => {
-                            return Err(at(RuntimeErrorKind::TypeMismatch {
-                                expected: "function",
-                                found: found.clone(),
-                            }));
-                        }
+                    let Value::Function(function) = &self.stack[args - 1] else {
+                        panic!("the checker only lets functions be called");
                     };
-                    if argc != function.arity {
-                        return Err(at(RuntimeErrorKind::ArgumentCount {
-                            name: function.name.clone(),
-                            expected: function.arity,
-                            found: argc,
-                        }));
-                    }
+                    let function = Rc::clone(function);
                     if self.frames.len() == MAX_CALL_DEPTH {
                         return Err(at(RuntimeErrorKind::StackOverflow));
                     }
@@ -158,7 +146,7 @@ mod tests {
     fn run(input: &str) -> (Result<Value, RuntimeError>, String) {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
         check(&program, &Env::default()).unwrap();
-        let bytecode = compile(&program, &Scope::default()).unwrap();
+        let bytecode = compile(&program, &Scope::default());
         let mut out = Vec::new();
         let result = Vm::new(&mut out).run(&bytecode);
         (result, String::from_utf8(out).unwrap())
@@ -185,7 +173,7 @@ mod tests {
             .map(|line| {
                 let program = Parser::new(tokenize(line).unwrap()).parse().unwrap();
                 let checked = check(&program, &env).map_err(|e| e.to_string())?;
-                let bytecode = compile(&program, &scope).map_err(|e| e.to_string())?;
+                let bytecode = compile(&program, &scope);
                 let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
                 env = checked;
                 scope = bytecode.scope;

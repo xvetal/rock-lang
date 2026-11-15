@@ -21,3 +21,20 @@ impl fmt::Display for Value {
         }
     }
 }
+
+// The checker guarantees the operand types, so a mismatch here is a bug.
+impl Value {
+    pub fn as_int(&self) -> i64 {
+        match self {
+            Value::Int(n) => *n,
+            other => panic!("expected int, found {other}"),
+        }
+    }
+
+    pub fn as_bool(&self) -> bool {
+        match self {
+            Value::Bool(b) => *b,
+            other => panic!("expected bool, found {other}"),
+        }
+    }
+}
