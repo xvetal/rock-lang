@@ -78,8 +78,6 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::Parser;
 
-    // Runs the program on both the VM and the tree-walking interpreter
-    // and checks that they agree, including error positions.
     fn agree(input: &str) -> Result<Value, RuntimeError> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
         let expected = Interpreter::new(Vec::new()).run(&program);
@@ -298,7 +296,6 @@ mod tests {
 
     #[test]
     fn undefined_variable_in_unreached_code_is_an_error() {
-        // The interpreter only fails when it reaches `y`; the compiler checks every name.
         assert_eq!(
             compile_error("if false { y }"),
             "1:12: undefined variable: y"
