@@ -60,3 +60,9 @@ Run a program from a file:
 ```sh
 rock run examples/print.rk
 ```
+
+Check a program for errors without running it:
+
+```sh
+rock check examples/print.rk
+```

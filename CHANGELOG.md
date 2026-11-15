@@ -4,6 +4,7 @@
 
 ### Added
 - Programs are type-checked before they run: mismatched types, wrong argument counts and calls of non-functions are reported with their position, even in code that is never reached. The REPL remembers the types of earlier lines
+- `rock check <file>` reports parse and type errors without running the program
 
 ### Changed
 - Function parameters need type annotations, and functions declare their return type, e.g. `fn add(a: int, b: int) -> int`; without `->` a function returns `()`. Types are `int`, `bool`, `()` and function types such as `fn(int) -> int`

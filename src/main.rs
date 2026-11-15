@@ -15,6 +15,7 @@ use std::panic;
 use std::process::ExitCode;
 use std::thread;
 
+use ast::Program;
 use checker::Env;
 use compiler::Scope;
 use value::Value;
@@ -41,8 +42,9 @@ fn cli() -> ExitCode {
             ExitCode::SUCCESS
         }
         [_, cmd, path] if cmd == "run" => report(run_file(path)),
+        [_, cmd, path] if cmd == "check" => report(check_file(path).map(|()| Value::Unit)),
         _ => {
-            eprintln!("usage: rock [run <file>]");
+            eprintln!("usage: rock [run <file> | check <file>]");
             ExitCode::from(2)
         }
     }
@@ -76,14 +78,25 @@ fn repl() {
     }
 }
 
+fn read(path: &str) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))
+}
+
 fn run_file(path: &str) -> Result<Value, String> {
-    let source = fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+    let source = read(path)?;
     run(
         &mut Vm::new(io::stdout()),
         &mut Env::default(),
         &mut Scope::default(),
         &source,
     )
+}
+
+// Reports parse and type errors without compiling or running the program.
+fn check_file(path: &str) -> Result<(), String> {
+    let source = read(path)?;
+    check(&source, &Env::default())?;
+    Ok(())
 }
 
 fn report(result: Result<Value, String>) -> ExitCode {
@@ -106,14 +119,19 @@ fn run(
     scope: &mut Scope,
     source: &str,
 ) -> Result<Value, String> {
-    let tokens = lexer::tokenize(source)?;
-    let program = parser::Parser::new(tokens)
-        .parse()
-        .map_err(|e| e.to_string())?;
-    let checked = checker::check(&program, env).map_err(|e| e.to_string())?;
+    let (program, checked) = check(source, env)?;
     let bytecode = compiler::compile(&program, scope);
     let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
     *env = checked;
     *scope = bytecode.scope;
     Ok(value)
+}
+
+fn check(source: &str, env: &Env) -> Result<(Program, Env), String> {
+    let tokens = lexer::tokenize(source)?;
+    let program = parser::Parser::new(tokens)
+        .parse()
+        .map_err(|e| e.to_string())?;
+    let checked = checker::check(&program, env).map_err(|e| e.to_string())?;
+    Ok((program, checked))
 }
