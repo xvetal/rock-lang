@@ -11,6 +11,7 @@ pub struct Vm<W: Write> {
     stack: Vec<Value>,
     locals: Vec<Value>,
     frames: Vec<Frame>,
+    functions: Vec<Rc<Function>>,
 }
 
 struct Frame {
@@ -27,11 +28,27 @@ impl<W: Write> Vm<W> {
             stack: Vec::new(),
             locals: Vec::new(),
             frames: Vec::new(),
+            functions: Vec::new(),
         }
     }
+
     pub fn run(&mut self, bytecode: &Bytecode) -> Result<Value, RuntimeError> {
+        let locals = self.locals.len();
+        let functions = self.functions.len();
+        self.functions.extend(bytecode.functions.iter().cloned());
+        let result = self.execute(&bytecode.main);
+        if result.is_err() {
+            self.stack.clear();
+            self.frames.clear();
+            self.locals.truncate(locals);
+            self.functions.truncate(functions);
+        }
+        result
+    }
+
+    fn execute(&mut self, main: &Rc<Function>) -> Result<Value, RuntimeError> {
         let mut frame = Frame {
-            function: Rc::clone(&bytecode.main),
+            function: Rc::clone(main),
             ip: 0,
             locals: 0,
             stack: 0,
@@ -70,7 +87,7 @@ impl<W: Write> Vm<W> {
                     }
                 }
                 Op::Function(index) => {
-                    let function = Rc::clone(&bytecode.functions[index]);
+                    let function = Rc::clone(&self.functions[index]);
                     self.stack.push(Value::VmFunction(function));
                 }
                 Op::Call(argc) => {
@@ -133,7 +150,7 @@ impl<W: Write> Vm<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::compile;
+    use crate::compiler::{Scope, compile};
     use crate::interp::Interpreter;
     use crate::lexer::tokenize;
     use crate::parser::Parser;
@@ -143,7 +160,7 @@ mod tests {
         let mut expected_out = Vec::new();
         let expected = Interpreter::new(&mut expected_out).run(&program);
         let mut actual_out = Vec::new();
-        let actual = Vm::new(&mut actual_out).run(&compile(&program).unwrap());
+        let actual = Vm::new(&mut actual_out).run(&compile(&program, &Scope::default()).unwrap());
         assert_eq!(actual, expected, "VM and interpreter disagree on {input:?}");
         assert_eq!(
             actual_out, expected_out,
@@ -162,7 +179,7 @@ mod tests {
 
     fn vm(input: &str) -> Result<Value, RuntimeError> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        Vm::new(Vec::new()).run(&compile(&program).unwrap())
+        Vm::new(Vec::new()).run(&compile(&program, &Scope::default()).unwrap())
     }
 
     fn error(input: &str) -> String {
@@ -171,7 +188,24 @@ mod tests {
 
     fn compile_error(input: &str) -> String {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        compile(&program).unwrap_err().to_string()
+        compile(&program, &Scope::default())
+            .unwrap_err()
+            .to_string()
+    }
+
+    fn session(lines: &[&str]) -> Vec<Result<Value, String>> {
+        let mut vm = Vm::new(Vec::new());
+        let mut scope = Scope::default();
+        lines
+            .iter()
+            .map(|line| {
+                let program = Parser::new(tokenize(line).unwrap()).parse().unwrap();
+                let bytecode = compile(&program, &scope).map_err(|e| e.to_string())?;
+                let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
+                scope = bytecode.scope;
+                Ok(value)
+            })
+            .collect()
     }
 
     #[test]
@@ -449,6 +483,37 @@ mod tests {
     }
 
     #[test]
+    fn session_keeps_variables_and_functions() {
+        assert_eq!(
+            session(&["let x = 1;", "fn inc(n) { n + 1 }", "x = inc(x);", "inc(x)"]),
+            [
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Ok(Value::Int(3))
+            ]
+        );
+    }
+
+    #[test]
+    fn session_redefines_functions() {
+        assert_eq!(
+            session(&[
+                "fn f() { 1 }",
+                "fn g() { f() }",
+                "fn f() { 2 }",
+                "f() * 10 + g()"
+            ]),
+            [
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Ok(Value::Int(21))
+            ]
+        );
+    }
+
+    #[test]
     fn errors() {
         assert_eq!(error("1 +\n  true"), "1:3: expected integer, got true");
         assert_eq!(error("10 / (2 - 2)"), "1:4: division by zero");
@@ -540,6 +605,34 @@ mod tests {
         assert_eq!(
             compile_error("if false { y }"),
             "1:12: undefined variable: y"
+        );
+    }
+
+    #[test]
+    fn session_rolls_back_failed_lines() {
+        assert_eq!(
+            session(&[
+                "let x = 1;",
+                "let y = 2; 1 / 0",
+                "y",
+                "let z = 3; w",
+                "z",
+                "fn f() { f() } f()",
+                "f",
+                "let v = 5;",
+                "v + x",
+            ]),
+            [
+                Ok(Value::Unit),
+                Err("1:14: division by zero".to_string()),
+                Err("1:1: undefined variable: y".to_string()),
+                Err("1:12: undefined variable: w".to_string()),
+                Err("1:1: undefined variable: z".to_string()),
+                Err("1:10: stack overflow: more than 1000 nested calls".to_string()),
+                Err("1:1: undefined variable: f".to_string()),
+                Ok(Value::Unit),
+                Ok(Value::Int(6)),
+            ]
         );
     }
 }

@@ -44,7 +44,13 @@ impl fmt::Display for CompileErrorKind {
     }
 }
 
-pub fn compile(program: &Program) -> Result<Bytecode, CompileError> {
+#[derive(Debug, Clone, Default)]
+pub struct Scope {
+    locals: Vec<String>,
+    functions: Vec<String>,
+}
+
+pub fn compile(program: &Program, scope: &Scope) -> Result<Bytecode, CompileError> {
     let decls: Vec<&FnDecl> = program
         .stmts
         .iter()
@@ -59,12 +65,14 @@ pub fn compile(program: &Program) -> Result<Bytecode, CompileError> {
         }
     }
 
+    let mut names = scope.functions.clone();
+    names.extend(decls.iter().map(|decl| decl.name.clone()));
     let functions = decls
         .iter()
-        .map(|decl| function(decl, &decls))
+        .map(|decl| function(decl, &names))
         .collect::<Result<_, _>>()?;
 
-    let mut compiler = Compiler::new(&decls, Vec::new());
+    let mut compiler = Compiler::new(&names, scope.locals.clone());
     compiler.stmts(&program.stmts)?;
     if let Some(expr) = &program.expr {
         compiler.expr(expr)?;
@@ -74,14 +82,19 @@ pub fn compile(program: &Program) -> Result<Bytecode, CompileError> {
         arity: 0,
         chunk: compiler.chunk,
     };
+    let scope = Scope {
+        locals: compiler.locals,
+        functions: names,
+    };
     Ok(Bytecode {
         main: Rc::new(main),
         functions,
+        scope,
     })
 }
 
-fn function(decl: &FnDecl, decls: &[&FnDecl]) -> Result<Rc<Function>, CompileError> {
-    let mut compiler = Compiler::new(decls, decl.params.clone());
+fn function(decl: &FnDecl, names: &[String]) -> Result<Rc<Function>, CompileError> {
+    let mut compiler = Compiler::new(names, decl.params.clone());
     compiler.block(&decl.body, decl.pos)?;
     compiler.chunk.emit(Op::Return, decl.pos);
     Ok(Rc::new(Function {
@@ -92,7 +105,7 @@ fn function(decl: &FnDecl, decls: &[&FnDecl]) -> Result<Rc<Function>, CompileErr
 }
 
 struct Compiler<'a> {
-    functions: &'a [&'a FnDecl],
+    functions: &'a [String],
     chunk: Chunk,
     locals: Vec<String>,
     temps: usize,
@@ -107,7 +120,7 @@ struct Loop {
 }
 
 impl<'a> Compiler<'a> {
-    fn new(functions: &'a [&'a FnDecl], locals: Vec<String>) -> Self {
+    fn new(functions: &'a [String], locals: Vec<String>) -> Self {
         Self {
             functions,
             chunk: Chunk::default(),
@@ -167,7 +180,7 @@ impl<'a> Compiler<'a> {
         if let Some(slot) = self.local(name) {
             return Some(Op::GetLocal(slot));
         }
-        let index = self.functions.iter().position(|f| f.name == name)?;
+        let index = self.functions.iter().rposition(|f| f == name)?;
         Some(Op::Function(index))
     }
 
@@ -353,7 +366,12 @@ mod tests {
 
     fn code(input: &str) -> Vec<Op> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        compile(&program).unwrap().main.chunk.code.clone()
+        compile(&program, &Scope::default())
+            .unwrap()
+            .main
+            .chunk
+            .code
+            .clone()
     }
 
     #[test]
@@ -575,7 +593,7 @@ mod tests {
         let program = Parser::new(tokenize("fn add(a, b) { let c = a + b; c }").unwrap())
             .parse()
             .unwrap();
-        let bytecode = compile(&program).unwrap();
+        let bytecode = compile(&program, &Scope::default()).unwrap();
         assert_eq!(
             bytecode.functions[0].chunk.code,
             [
@@ -598,7 +616,7 @@ mod tests {
     #[test]
     fn positions_follow_code() {
         let program = Parser::new(tokenize("1 +\n  2").unwrap()).parse().unwrap();
-        let bytecode = compile(&program).unwrap();
+        let bytecode = compile(&program, &Scope::default()).unwrap();
         let positions: Vec<String> = bytecode
             .main
             .chunk

@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::ast::{BinaryOp, UnaryOp};
+use crate::compiler::Scope;
 use crate::lexer::Pos;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -40,6 +41,7 @@ pub struct Function {
 pub struct Bytecode {
     pub main: Rc<Function>,
     pub functions: Vec<Rc<Function>>,
+    pub scope: Scope,
 }
 
 impl Chunk {

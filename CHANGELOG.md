@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- Programs run on a bytecode virtual machine instead of the tree-walking interpreter
+- Undefined names are reported before the program runs, even in code that is never reached, e.g. `if false { y }`
+- Functions no longer see top-level variables; pass values as arguments instead
+- Functions can be called before their declaration, so mutual recursion works
+- Declaring the same function twice in a program is an error
+- Calling `print` with a wrong number of arguments is reported before the program runs
+
 ## [0.6.0] - 2026-11-14
 
 ### Added

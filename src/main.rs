@@ -1,14 +1,12 @@
 mod ast;
-// Not wired into the CLI until the VM supports the whole language.
-#[cfg_attr(not(test), allow(dead_code))]
 mod chunk;
-#[cfg_attr(not(test), allow(dead_code))]
 mod compiler;
+// Kept only as the reference the VM tests compare against.
+#[cfg_attr(not(test), allow(dead_code))]
 mod interp;
 mod lexer;
 mod parser;
 mod value;
-#[cfg_attr(not(test), allow(dead_code))]
 mod vm;
 
 use std::env;
@@ -18,14 +16,16 @@ use std::panic;
 use std::process::ExitCode;
 use std::thread;
 
-use interp::{Interpreter, STACK_SIZE};
+use compiler::Scope;
+use interp::STACK_SIZE;
 use value::Value;
+use vm::Vm;
 
 fn main() -> ExitCode {
     thread::Builder::new()
         .stack_size(STACK_SIZE)
         .spawn(cli)
-        .expect("interpreter thread should start")
+        .expect("cli thread should start")
         .join()
         .unwrap_or_else(|payload| panic::resume_unwind(payload))
 }
@@ -48,7 +48,8 @@ fn cli() -> ExitCode {
 fn repl() {
     let stdin = io::stdin();
     let mut line = String::new();
-    let mut interp = Interpreter::new(io::stdout());
+    let mut scope = Scope::default();
+    let mut vm = Vm::new(io::stdout());
     loop {
         print!("> ");
         io::stdout().flush().expect("stdout should be writable");
@@ -67,13 +68,13 @@ fn repl() {
             continue;
         }
 
-        report(run(&mut interp, &line));
+        report(run(&mut vm, &mut scope, &line));
     }
 }
 
 fn run_file(path: &str) -> Result<Value, String> {
     let source = fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
-    run(&mut Interpreter::new(io::stdout()), &source)
+    run(&mut Vm::new(io::stdout()), &mut Scope::default(), &source)
 }
 
 fn report(result: Result<Value, String>) -> ExitCode {
@@ -90,10 +91,13 @@ fn report(result: Result<Value, String>) -> ExitCode {
     }
 }
 
-fn run(interp: &mut Interpreter<io::Stdout>, source: &str) -> Result<Value, String> {
+fn run(vm: &mut Vm<io::Stdout>, scope: &mut Scope, source: &str) -> Result<Value, String> {
     let tokens = lexer::tokenize(source)?;
     let program = parser::Parser::new(tokens)
         .parse()
         .map_err(|e| e.to_string())?;
-    interp.run(&program).map_err(|e| e.to_string())
+    let bytecode = compiler::compile(&program, scope).map_err(|e| e.to_string())?;
+    let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
+    *scope = bytecode.scope;
+    Ok(value)
 }
