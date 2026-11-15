@@ -26,8 +26,8 @@ Version 0.7.0: programs run on a bytecode virtual machine, and names are checked
 ## Example
 
 ```rock
-let n = 5;
-let acc = 1;
+let mut n = 5;
+let mut acc = 1;
 while n > 1 {
     acc = acc * n;
     n = n - 1;

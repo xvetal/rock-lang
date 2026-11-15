@@ -5,6 +5,7 @@ pub enum Token {
     Int(u64),
     Ident(String),
     Let,
+    Mut,
     True,
     False,
     If,
@@ -45,6 +46,7 @@ impl fmt::Display for Token {
             Token::Int(n) => write!(f, "{n}"),
             Token::Ident(name) => write!(f, "{name}"),
             Token::Let => write!(f, "let"),
+            Token::Mut => write!(f, "mut"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
             Token::If => write!(f, "if"),
@@ -168,6 +170,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
                 }
                 match name.as_str() {
                     "let" => Token::Let,
+                    "mut" => Token::Mut,
                     "true" => Token::True,
                     "false" => Token::False,
                     "if" => Token::If,
@@ -305,6 +308,7 @@ mod tests {
     #[test]
     fn let_keyword() {
         assert_eq!(tokens("let"), Ok(vec![Token::Let, Token::Eof]));
+        assert_eq!(tokens("mut"), Ok(vec![Token::Mut, Token::Eof]));
     }
 
     #[test]
@@ -437,7 +441,7 @@ mod tests {
 
     #[test]
     fn display_round_trip() {
-        let source = "let x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 \
+        let source = "let mut x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 \
                       == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; \
                       { } if x { } else { } while x { break ; continue } \
                       fn f ( a : int ) -> int { return }";

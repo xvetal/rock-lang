@@ -145,8 +145,16 @@ impl FnDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Let { name: String, value: Expr },
-    Assign { name: String, value: Expr, pos: Pos },
+    Let {
+        name: String,
+        mutable: bool,
+        value: Expr,
+    },
+    Assign {
+        name: String,
+        value: Expr,
+        pos: Pos,
+    },
     Fn(FnDecl),
     Expr(Expr),
 }

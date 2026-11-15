@@ -127,11 +127,19 @@ impl Parser {
 
     fn let_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.advance();
+        let mutable = self.peek() == &Token::Mut;
+        if mutable {
+            self.advance();
+        }
         let name = self.ident("variable name after 'let'")?;
         self.expect(Token::Eq, "'='")?;
         let value = self.expr()?;
         self.expect(Token::Semicolon, "';'")?;
-        Ok(Stmt::Let { name, value })
+        Ok(Stmt::Let {
+            name,
+            mutable,
+            value,
+        })
     }
 
     fn fn_decl(&mut self) -> Result<Stmt, ParseError> {
@@ -591,6 +599,7 @@ mod tests {
     fn let_stmt(name: &str, value: Expr) -> Stmt {
         Stmt::Let {
             name: name.to_string(),
+            mutable: false,
             value,
         }
     }
@@ -1292,6 +1301,21 @@ mod tests {
     }
 
     #[test]
+    fn let_mut_statement() {
+        assert_eq!(
+            parse_program("let mut x = 1;"),
+            Ok(Program {
+                stmts: vec![Stmt::Let {
+                    name: "x".to_string(),
+                    mutable: true,
+                    value: int(1),
+                }],
+                expr: None
+            })
+        );
+    }
+
+    #[test]
     fn statements_then_expression() {
         assert_eq!(
             parse_program("let x = 1; let y = x; y"),
@@ -1474,6 +1498,10 @@ mod tests {
         assert_eq!(
             parse_program("let = 1;"),
             Err(at(expected("variable name after 'let'", Token::Eq), 1, 5))
+        );
+        assert_eq!(
+            parse_program("let mut = 1;"),
+            Err(at(expected("variable name after 'let'", Token::Eq), 1, 9))
         );
     }
 

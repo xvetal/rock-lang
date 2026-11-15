@@ -19,6 +19,7 @@ impl fmt::Display for CheckError {
 pub enum CheckErrorKind {
     UndefinedVariable(String),
     UndefinedFunction(String),
+    AssignToImmutable(String),
     DuplicateFunction(String),
     PrintArgumentCount(usize),
     Mismatch {
@@ -45,6 +46,9 @@ impl fmt::Display for CheckErrorKind {
         match self {
             CheckErrorKind::UndefinedVariable(name) => write!(f, "undefined variable: {name}"),
             CheckErrorKind::UndefinedFunction(name) => write!(f, "undefined function: {name}"),
+            CheckErrorKind::AssignToImmutable(name) => {
+                write!(f, "cannot assign to immutable variable: {name}")
+            }
             CheckErrorKind::DuplicateFunction(name) => write!(f, "duplicate function: {name}"),
             CheckErrorKind::PrintArgumentCount(found) => {
                 write!(f, "print expects 1 argument, got {found}")
@@ -68,8 +72,15 @@ impl fmt::Display for CheckErrorKind {
 
 #[derive(Debug, Clone, Default)]
 pub struct Env {
-    locals: Vec<(String, Type)>,
+    locals: Vec<Local>,
     functions: Vec<(String, Type)>,
+}
+
+#[derive(Debug, Clone)]
+struct Local {
+    name: String,
+    ty: Type,
+    mutable: bool,
 }
 
 pub fn check(program: &Program, env: &Env) -> Result<Env, CheckError> {
@@ -108,7 +119,11 @@ fn function(decl: &FnDecl, functions: &[(String, Type)]) -> Result<(), CheckErro
     let params = decl
         .params
         .iter()
-        .map(|p| (p.name.clone(), p.ty.clone()))
+        .map(|p| Local {
+            name: p.name.clone(),
+            ty: p.ty.clone(),
+            mutable: false,
+        })
         .collect();
     let mut checker = Checker::new(functions, params, decl.ret.clone());
     let body = checker.block(&decl.body)?;
@@ -148,13 +163,13 @@ fn join(first: Type, second: Type, pos: Pos) -> Result<Type, CheckError> {
 
 struct Checker<'a> {
     functions: &'a [(String, Type)],
-    locals: Vec<(String, Type)>,
+    locals: Vec<Local>,
     ret: Type,
     diverges: bool,
 }
 
 impl<'a> Checker<'a> {
-    fn new(functions: &'a [(String, Type)], locals: Vec<(String, Type)>, ret: Type) -> Self {
+    fn new(functions: &'a [(String, Type)], locals: Vec<Local>, ret: Type) -> Self {
         Self {
             functions,
             locals,
@@ -166,16 +181,27 @@ impl<'a> Checker<'a> {
     fn stmts(&mut self, stmts: &[Stmt]) -> Result<(), CheckError> {
         for stmt in stmts {
             match stmt {
-                Stmt::Let { name, value } => {
+                Stmt::Let {
+                    name,
+                    mutable,
+                    value,
+                } => {
                     let ty = self.expr(value)?;
-                    self.locals.push((name.clone(), ty));
+                    self.locals.push(Local {
+                        name: name.clone(),
+                        ty,
+                        mutable: *mutable,
+                    });
                 }
                 Stmt::Assign { name, value, pos } => {
                     let found = self.expr(value)?;
-                    let expected = self
+                    let local = self
                         .local(name)
                         .ok_or_else(|| CheckErrorKind::UndefinedVariable(name.clone()).at(*pos))?;
-                    expect(&expected, &found, value_pos(value))?;
+                    if !local.mutable {
+                        return Err(CheckErrorKind::AssignToImmutable(name.clone()).at(*pos));
+                    }
+                    expect(&local.ty, &found, value_pos(value))?;
                 }
                 Stmt::Expr(expr) => {
                     self.expr(expr)?;
@@ -198,14 +224,13 @@ impl<'a> Checker<'a> {
         Ok(ty)
     }
 
-    fn local(&self, name: &str) -> Option<Type> {
-        let (_, ty) = self.locals.iter().rfind(|(n, _)| n == name)?;
-        Some(ty.clone())
+    fn local(&self, name: &str) -> Option<&Local> {
+        self.locals.iter().rfind(|local| local.name == name)
     }
 
     fn lookup(&self, name: &str) -> Option<Type> {
-        if let Some(ty) = self.local(name) {
-            return Some(ty);
+        if let Some(local) = self.local(name) {
+            return Some(local.ty.clone());
         }
         let (_, ty) = self.functions.iter().rfind(|(n, _)| n == name)?;
         Some(ty.clone())
@@ -365,11 +390,11 @@ mod tests {
     fn well_typed_programs() {
         for input in [
             "(1 + 2 * 3 < 7) == true",
-            "let x = 1; x = x + 1; x",
+            "let mut x = 1; x = x + 1; x",
             "if true { 1 } else { 2 }",
             "if true { print(1); }",
             "print(1) == print(2)",
-            "let i = 0; while i < 3 { i = i + 1; if i == 2 { break; } }",
+            "let mut i = 0; while i < 3 { i = i + 1; if i == 2 { break; } }",
             "fn f() {} let g = f; g()",
             "fn print(x: bool) -> bool { x } print(true) && true",
             "fn twice(f: fn(int) -> int, x: int) -> int { f(f(x)) }
@@ -377,6 +402,8 @@ mod tests {
              twice(inc, 1)",
             "fn even(n: int) -> bool { if n == 0 { true } else { odd(n - 1) } }
              fn odd(n: int) -> bool { if n == 0 { false } else { even(n - 1) } }",
+            "let mut x = 1; { let x = true; } x = 2;",
+            "fn f(n: int) -> int { let mut n = n; n = n + 1; n }",
         ] {
             assert!(check_program(input).is_ok(), "{input}");
         }
@@ -474,8 +501,24 @@ mod tests {
     #[test]
     fn assignment_keeps_type() {
         assert_eq!(
-            error("let x = 1; x = true;"),
-            "1:16: expected int, found bool"
+            error("let mut x = 1; x = true;"),
+            "1:20: expected int, found bool"
+        );
+    }
+
+    #[test]
+    fn assignment_needs_mut() {
+        assert_eq!(
+            error("let x = 1; x = 2;"),
+            "1:12: cannot assign to immutable variable: x"
+        );
+        assert_eq!(
+            error("fn f(n: int) { n = 1; }"),
+            "1:16: cannot assign to immutable variable: n"
+        );
+        assert_eq!(
+            error("let mut x = 1; { let x = 2; x = 3; }"),
+            "1:29: cannot assign to immutable variable: x"
         );
     }
 

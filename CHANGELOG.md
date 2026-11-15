@@ -9,6 +9,7 @@
 ### Changed
 - Function parameters need type annotations, and functions declare their return type, e.g. `fn add(a: int, b: int) -> int`; without `->` a function returns `()`. Types are `int`, `bool`, `()` and function types such as `fn(int) -> int`
 - `if` without `else` and `while` bodies must have type `()`, e.g. `if c { 1 }` is now an error; write `if c { 1; }`
+- Variables are immutable unless declared with `let mut`, e.g. `let mut x = 1; x = 2;`; `mut` is now a keyword
 
 ## [0.7.0] - 2026-11-15
 

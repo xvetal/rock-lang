@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn top_level_variables() {
         assert_eq!(vm("let x = 2; let y = x * 3; y + 1"), Ok(Value::Int(7)));
-        assert_eq!(vm("let x = 1; x = x + 10; x"), Ok(Value::Int(11)));
+        assert_eq!(vm("let mut x = 1; x = x + 10; x"), Ok(Value::Int(11)));
         assert_eq!(vm("let x = 1; let x = x + 1; x"), Ok(Value::Int(2)));
     }
 
@@ -262,9 +262,12 @@ mod tests {
         assert_eq!(vm("{ let a = 1; let b = 2; a + b }"), Ok(Value::Int(3)));
         assert_eq!(vm("{ let a = 1; { let b = 2; a + b } }"), Ok(Value::Int(3)));
         assert_eq!(vm("let x = 1; { let x = x + 1; x }"), Ok(Value::Int(2)));
-        assert_eq!(vm("let x = 1; { let x = 2; x = 3; } x"), Ok(Value::Int(1)));
         assert_eq!(
-            vm("let x = 1; { let y = 2; x = x + y; } x"),
+            vm("let x = 1; { let mut x = 2; x = 3; } x"),
+            Ok(Value::Int(1))
+        );
+        assert_eq!(
+            vm("let mut x = 1; { let y = 2; x = x + y; } x"),
             Ok(Value::Int(3))
         );
         assert_eq!(
@@ -294,12 +297,12 @@ mod tests {
     #[test]
     fn while_loops() {
         assert_eq!(
-            vm("let i = 0; let sum = 0; while i < 5 { i = i + 1; sum = sum + i; } sum"),
+            vm("let mut i = 0; let mut sum = 0; while i < 5 { i = i + 1; sum = sum + i; } sum"),
             Ok(Value::Int(15))
         );
         assert_eq!(vm("while false { 1; }"), Ok(Value::Unit));
         assert_eq!(
-            vm("let i = 0; while i < 3 { let j = i; i = j + 1; } i"),
+            vm("let mut i = 0; while i < 3 { let j = i; i = j + 1; } i"),
             Ok(Value::Int(3))
         );
     }
@@ -307,11 +310,11 @@ mod tests {
     #[test]
     fn break_and_continue() {
         assert_eq!(
-            vm("let i = 0; while true { i = i + 1; if i == 4 { break; } } i"),
+            vm("let mut i = 0; while true { i = i + 1; if i == 4 { break; } } i"),
             Ok(Value::Int(4))
         );
         assert_eq!(
-            vm("let i = 0; let sum = 0;
+            vm("let mut i = 0; let mut sum = 0;
                  while i < 5 { i = i + 1; if i == 3 { continue; } sum = sum + i; }
                  sum"),
             Ok(Value::Int(12))
@@ -322,10 +325,10 @@ mod tests {
     #[test]
     fn break_leaves_only_inner_loop() {
         assert_eq!(
-            vm("let i = 0; let count = 0;
+            vm("let mut i = 0; let mut count = 0;
                  while i < 3 {
                      i = i + 1;
-                     let j = 0;
+                     let mut j = 0;
                      while true { j = j + 1; if j == 2 { break; } count = count + 1; }
                  }
                  count"),
@@ -337,7 +340,7 @@ mod tests {
     fn break_and_continue_clean_up_stacks() {
         assert_eq!(vm("while true { 1 + break; };"), Ok(Value::Unit));
         assert_eq!(
-            vm("let i = 0; while i < 3 { i = i + 1; 2 * { let a = i; continue; }; };"),
+            vm("let mut i = 0; while i < 3 { i = i + 1; 2 * { let a = i; continue; }; };"),
             Ok(Value::Unit)
         );
         assert_eq!(
@@ -345,7 +348,7 @@ mod tests {
             Ok(Value::Int(3))
         );
         assert_eq!(
-            vm("let i = 0; while i < 3 { let a = i; i = i + 1; continue; } { let c = 7; c }"),
+            vm("let mut i = 0; while i < 3 { let a = i; i = i + 1; continue; } { let c = 7; c }"),
             Ok(Value::Int(7))
         );
     }
@@ -409,7 +412,7 @@ mod tests {
         );
         assert_eq!(
             vm(
-                "fn root(n: int) -> int { let i = 0; while true { if i * i >= n { return i; } i = i + 1; } 0 } root(50)"
+                "fn root(n: int) -> int { let mut i = 0; while true { if i * i >= n { return i; } i = i + 1; } 0 } root(50)"
             ),
             Ok(Value::Int(8))
         );
@@ -485,7 +488,7 @@ mod tests {
             ""
         );
         assert_eq!(
-            output("let i = 0; while i < 3 { print(i); i = i + 1; }"),
+            output("let mut i = 0; while i < 3 { print(i); i = i + 1; }"),
             "0\n1\n2\n"
         );
         assert_eq!(
@@ -503,7 +506,7 @@ mod tests {
     fn session_keeps_variables_and_functions() {
         assert_eq!(
             session(&[
-                "let x = 1;",
+                "let mut x = 1;",
                 "fn inc(n: int) -> int { n + 1 }",
                 "x = inc(x);",
                 "inc(x)"
@@ -555,6 +558,20 @@ mod tests {
                 Ok(Value::Int(2)),
                 Err("1:1: expected int, found bool".to_string()),
                 Err("1:1: expected int, found bool".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn session_keeps_mutability() {
+        assert_eq!(
+            session(&["let x = 1;", "let mut y = 2;", "x = 3;", "y = 4;", "y"]),
+            [
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Err("1:1: cannot assign to immutable variable: x".to_string()),
+                Ok(Value::Unit),
+                Ok(Value::Int(4)),
             ]
         );
     }

@@ -85,7 +85,7 @@ impl<'a> Compiler<'a> {
     fn stmts(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
             match stmt {
-                Stmt::Let { name, value } => {
+                Stmt::Let { name, value, .. } => {
                     self.expr(value);
                     self.chunk.emit(Op::DefineLocal, value.pos);
                     self.locals.push(name.clone());
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn top_level_let_defines_local() {
         assert_eq!(
-            code("let x = 1; x = x + 2;"),
+            code("let mut x = 1; x = x + 2;"),
             [
                 Op::Int(1),
                 Op::DefineLocal,
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn block_locals_follow_top_level_ones() {
         assert_eq!(
-            code("let x = 1; { let y = x; y = 2; y }"),
+            code("let x = 1; { let mut y = x; y = 2; y }"),
             [
                 Op::Int(1),
                 Op::DefineLocal,
@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn while_jumps_back_to_condition() {
         assert_eq!(
-            code("let x = true; while x { x = false; }"),
+            code("let mut x = true; while x { x = false; }"),
             [
                 Op::Bool(true),
                 Op::DefineLocal,
