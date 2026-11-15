@@ -4,7 +4,6 @@ use crate::value::Value;
 
 pub struct Vm {
     stack: Vec<Value>,
-    globals: Vec<Value>,
     locals: Vec<Value>,
 }
 
@@ -12,7 +11,6 @@ impl Vm {
     pub fn new() -> Self {
         Self {
             stack: Vec::new(),
-            globals: Vec::new(),
             locals: Vec::new(),
         }
     }
@@ -30,12 +28,6 @@ impl Vm {
                 Op::Pop => {
                     self.pop();
                 }
-                Op::DefineGlobal => {
-                    let value = self.pop();
-                    self.globals.push(value);
-                }
-                Op::GetGlobal(slot) => self.stack.push(self.globals[*slot].clone()),
-                Op::SetGlobal(slot) => self.globals[*slot] = self.pop(),
                 Op::DefineLocal => {
                     let value = self.pop();
                     self.locals.push(value);
@@ -155,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn global_variables() {
+    fn top_level_variables() {
         assert_eq!(agree("let x = 2; let y = x * 3; y + 1"), Ok(Value::Int(7)));
         assert_eq!(agree("let x = 1; x = x + 10; x"), Ok(Value::Int(11)));
         assert_eq!(agree("let x = 1; let x = x + 1; x"), Ok(Value::Int(2)));

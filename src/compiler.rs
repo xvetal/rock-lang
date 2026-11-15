@@ -38,9 +38,7 @@ impl fmt::Display for CompileErrorKind {
 pub fn compile(program: &Program) -> Result<Chunk, CompileError> {
     let mut compiler = Compiler {
         chunk: Chunk::default(),
-        globals: Vec::new(),
         locals: Vec::new(),
-        depth: 0,
         temps: 0,
         loops: Vec::new(),
     };
@@ -53,16 +51,9 @@ pub fn compile(program: &Program) -> Result<Chunk, CompileError> {
 
 struct Compiler {
     chunk: Chunk,
-    globals: Vec<String>,
     locals: Vec<String>,
-    depth: usize,
     temps: usize,
     loops: Vec<Loop>,
-}
-
-enum Slot {
-    Global(usize),
-    Local(usize),
 }
 
 struct Loop {
@@ -78,21 +69,13 @@ impl Compiler {
             match stmt {
                 Stmt::Let { name, value } => {
                     self.expr(value)?;
-                    if self.depth == 0 {
-                        self.chunk.emit(Op::DefineGlobal, value.pos);
-                        self.globals.push(name.clone());
-                    } else {
-                        self.chunk.emit(Op::DefineLocal, value.pos);
-                        self.locals.push(name.clone());
-                    }
+                    self.chunk.emit(Op::DefineLocal, value.pos);
+                    self.locals.push(name.clone());
                 }
                 Stmt::Assign { name, value, pos } => {
                     self.expr(value)?;
-                    let op = match self.resolve(name, *pos)? {
-                        Slot::Global(slot) => Op::SetGlobal(slot),
-                        Slot::Local(slot) => Op::SetLocal(slot),
-                    };
-                    self.chunk.emit(op, *pos);
+                    let slot = self.resolve(name, *pos)?;
+                    self.chunk.emit(Op::SetLocal(slot), *pos);
                 }
                 Stmt::Expr(expr) => {
                     self.expr(expr)?;
@@ -108,7 +91,6 @@ impl Compiler {
 
     fn block(&mut self, block: &Block, pos: Pos) -> Result<(), CompileError> {
         let outer = self.locals.len();
-        self.depth += 1;
         self.stmts(&block.stmts)?;
         match &block.expr {
             Some(value) => self.expr(value)?,
@@ -116,7 +98,6 @@ impl Compiler {
                 self.chunk.emit(Op::Unit, pos);
             }
         }
-        self.depth -= 1;
         let count = self.locals.len() - outer;
         if count > 0 {
             self.chunk.emit(Op::DropLocals(count), pos);
@@ -125,14 +106,11 @@ impl Compiler {
         Ok(())
     }
 
-    fn resolve(&self, name: &str, pos: Pos) -> Result<Slot, CompileError> {
-        if let Some(slot) = self.locals.iter().rposition(|n| n == name) {
-            Ok(Slot::Local(slot))
-        } else if let Some(slot) = self.globals.iter().rposition(|n| n == name) {
-            Ok(Slot::Global(slot))
-        } else {
-            Err(CompileErrorKind::UndefinedVariable(name.to_string()).at(pos))
-        }
+    fn resolve(&self, name: &str, pos: Pos) -> Result<usize, CompileError> {
+        self.locals
+            .iter()
+            .rposition(|n| n == name)
+            .ok_or_else(|| CompileErrorKind::UndefinedVariable(name.to_string()).at(pos))
     }
 
     fn expr(&mut self, expr: &Expr) -> Result<(), CompileError> {
@@ -145,11 +123,8 @@ impl Compiler {
                 self.chunk.emit(Op::Bool(*b), pos);
             }
             ExprKind::Var(name) => {
-                let op = match self.resolve(name, pos)? {
-                    Slot::Global(slot) => Op::GetGlobal(slot),
-                    Slot::Local(slot) => Op::GetLocal(slot),
-                };
-                self.chunk.emit(op, pos);
+                let slot = self.resolve(name, pos)?;
+                self.chunk.emit(Op::GetLocal(slot), pos);
             }
             ExprKind::Unary { op, operand } => {
                 self.expr(operand)?;
@@ -370,16 +345,16 @@ mod tests {
     }
 
     #[test]
-    fn top_level_let_defines_global() {
+    fn top_level_let_defines_local() {
         assert_eq!(
             code("let x = 1; x = x + 2;"),
             [
                 Op::Int(1),
-                Op::DefineGlobal,
-                Op::GetGlobal(0),
+                Op::DefineLocal,
+                Op::GetLocal(0),
                 Op::Int(2),
                 Op::Binary(Add),
-                Op::SetGlobal(0)
+                Op::SetLocal(0)
             ]
         );
     }
@@ -390,26 +365,26 @@ mod tests {
             code("let x = 1; let x = 2; x"),
             [
                 Op::Int(1),
-                Op::DefineGlobal,
+                Op::DefineLocal,
                 Op::Int(2),
-                Op::DefineGlobal,
-                Op::GetGlobal(1)
+                Op::DefineLocal,
+                Op::GetLocal(1)
             ]
         );
     }
 
     #[test]
-    fn block_let_defines_local() {
+    fn block_locals_follow_top_level_ones() {
         assert_eq!(
             code("let x = 1; { let y = x; y = 2; y }"),
             [
                 Op::Int(1),
-                Op::DefineGlobal,
-                Op::GetGlobal(0),
+                Op::DefineLocal,
+                Op::GetLocal(0),
                 Op::DefineLocal,
                 Op::Int(2),
-                Op::SetLocal(0),
-                Op::GetLocal(0),
+                Op::SetLocal(1),
+                Op::GetLocal(1),
                 Op::DropLocals(1)
             ]
         );
@@ -439,11 +414,11 @@ mod tests {
             code("let x = true; while x { x = false; }"),
             [
                 Op::Bool(true),
-                Op::DefineGlobal,
-                Op::GetGlobal(0),
+                Op::DefineLocal,
+                Op::GetLocal(0),
                 Op::JumpIfFalse(9),
                 Op::Bool(false),
-                Op::SetGlobal(0),
+                Op::SetLocal(0),
                 Op::Unit,
                 Op::Pop,
                 Op::Jump(2),
