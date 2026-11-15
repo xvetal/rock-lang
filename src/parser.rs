@@ -133,6 +133,7 @@ impl Parser {
 
     fn fn_decl(&mut self) -> Result<Stmt, ParseError> {
         self.advance();
+        let pos = self.peek_pos();
         let name = self.ident("function name after 'fn'")?;
         self.expect(Token::LParen, "'('")?;
         let params = self.list(|p| p.ident("parameter name"))?;
@@ -140,7 +141,12 @@ impl Parser {
         self.in_fn = true;
         let body = self.block()?;
         self.in_fn = false;
-        Ok(Stmt::Fn(Rc::new(FnDecl { name, params, body })))
+        Ok(Stmt::Fn(Rc::new(FnDecl {
+            name,
+            pos,
+            params,
+            body,
+        })))
     }
 
     fn assign_stmt(&mut self, name: String) -> Result<Stmt, ParseError> {
@@ -505,6 +511,7 @@ mod tests {
             }
             Stmt::Fn(decl) => {
                 let decl = Rc::get_mut(decl).expect("a freshly parsed declaration is not shared");
+                decl.pos = NO_POS;
                 strip_block(&mut decl.body);
             }
         }
@@ -610,6 +617,7 @@ mod tests {
         };
         Stmt::Fn(Rc::new(FnDecl {
             name: name.to_string(),
+            pos: NO_POS,
             params: params.iter().map(|p| p.to_string()).collect(),
             body,
         }))

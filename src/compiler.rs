@@ -1,7 +1,8 @@
 use std::fmt;
+use std::rc::Rc;
 
-use crate::ast::{Block, Expr, ExprKind, LogicalOp, Program, Stmt};
-use crate::chunk::{Chunk, Op};
+use crate::ast::{Block, Expr, ExprKind, FnDecl, LogicalOp, Program, Stmt};
+use crate::chunk::{Bytecode, Chunk, Function, Op};
 use crate::lexer::Pos;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,6 +20,8 @@ impl fmt::Display for CompileError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompileErrorKind {
     UndefinedVariable(String),
+    UndefinedFunction(String),
+    DuplicateFunction(String),
 }
 
 impl CompileErrorKind {
@@ -31,25 +34,61 @@ impl fmt::Display for CompileErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CompileErrorKind::UndefinedVariable(name) => write!(f, "undefined variable: {name}"),
+            CompileErrorKind::UndefinedFunction(name) => write!(f, "undefined function: {name}"),
+            CompileErrorKind::DuplicateFunction(name) => write!(f, "duplicate function: {name}"),
         }
     }
 }
 
-pub fn compile(program: &Program) -> Result<Chunk, CompileError> {
-    let mut compiler = Compiler {
-        chunk: Chunk::default(),
-        locals: Vec::new(),
-        temps: 0,
-        loops: Vec::new(),
-    };
+pub fn compile(program: &Program) -> Result<Bytecode, CompileError> {
+    let decls: Vec<&FnDecl> = program
+        .stmts
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::Fn(decl) => Some(decl.as_ref()),
+            _ => None,
+        })
+        .collect();
+    for (i, decl) in decls.iter().enumerate() {
+        if decls[..i].iter().any(|other| other.name == decl.name) {
+            return Err(CompileErrorKind::DuplicateFunction(decl.name.clone()).at(decl.pos));
+        }
+    }
+
+    let functions = decls
+        .iter()
+        .map(|decl| function(decl, &decls))
+        .collect::<Result<_, _>>()?;
+
+    let mut compiler = Compiler::new(&decls, Vec::new());
     compiler.stmts(&program.stmts)?;
     if let Some(expr) = &program.expr {
         compiler.expr(expr)?;
     }
-    Ok(compiler.chunk)
+    let main = Function {
+        name: "main".to_string(),
+        arity: 0,
+        chunk: compiler.chunk,
+    };
+    Ok(Bytecode {
+        main: Rc::new(main),
+        functions,
+    })
 }
 
-struct Compiler {
+fn function(decl: &FnDecl, decls: &[&FnDecl]) -> Result<Rc<Function>, CompileError> {
+    let mut compiler = Compiler::new(decls, decl.params.clone());
+    compiler.block(&decl.body, decl.pos)?;
+    compiler.chunk.emit(Op::Return, decl.pos);
+    Ok(Rc::new(Function {
+        name: decl.name.clone(),
+        arity: decl.params.len(),
+        chunk: compiler.chunk,
+    }))
+}
+
+struct Compiler<'a> {
+    functions: &'a [&'a FnDecl],
     chunk: Chunk,
     locals: Vec<String>,
     temps: usize,
@@ -63,7 +102,17 @@ struct Loop {
     breaks: Vec<usize>,
 }
 
-impl Compiler {
+impl<'a> Compiler<'a> {
+    fn new(functions: &'a [&'a FnDecl], locals: Vec<String>) -> Self {
+        Self {
+            functions,
+            chunk: Chunk::default(),
+            locals,
+            temps: 0,
+            loops: Vec::new(),
+        }
+    }
+
     fn stmts(&mut self, stmts: &[Stmt]) -> Result<(), CompileError> {
         for stmt in stmts {
             match stmt {
@@ -74,16 +123,16 @@ impl Compiler {
                 }
                 Stmt::Assign { name, value, pos } => {
                     self.expr(value)?;
-                    let slot = self.resolve(name, *pos)?;
+                    let slot = self.local(name).ok_or_else(|| {
+                        CompileErrorKind::UndefinedVariable(name.clone()).at(*pos)
+                    })?;
                     self.chunk.emit(Op::SetLocal(slot), *pos);
                 }
                 Stmt::Expr(expr) => {
                     self.expr(expr)?;
                     self.chunk.emit(Op::Pop, expr.pos);
                 }
-                Stmt::Fn(_) => {
-                    todo!("functions in the VM")
-                }
+                Stmt::Fn(_) => {}
             }
         }
         Ok(())
@@ -106,11 +155,16 @@ impl Compiler {
         Ok(())
     }
 
-    fn resolve(&self, name: &str, pos: Pos) -> Result<usize, CompileError> {
-        self.locals
-            .iter()
-            .rposition(|n| n == name)
-            .ok_or_else(|| CompileErrorKind::UndefinedVariable(name.to_string()).at(pos))
+    fn local(&self, name: &str) -> Option<usize> {
+        self.locals.iter().rposition(|n| n == name)
+    }
+
+    fn lookup(&self, name: &str) -> Option<Op> {
+        if let Some(slot) = self.local(name) {
+            return Some(Op::GetLocal(slot));
+        }
+        let index = self.functions.iter().position(|f| f.name == name)?;
+        Some(Op::Function(index))
     }
 
     fn expr(&mut self, expr: &Expr) -> Result<(), CompileError> {
@@ -123,8 +177,27 @@ impl Compiler {
                 self.chunk.emit(Op::Bool(*b), pos);
             }
             ExprKind::Var(name) => {
-                let slot = self.resolve(name, pos)?;
-                self.chunk.emit(Op::GetLocal(slot), pos);
+                let op = self
+                    .lookup(name)
+                    .ok_or_else(|| CompileErrorKind::UndefinedVariable(name.clone()).at(pos))?;
+                self.chunk.emit(op, pos);
+            }
+            ExprKind::Call { name, args } => {
+                let callee = match self.lookup(name) {
+                    Some(op) => op,
+                    None if name == "print" => todo!("print in the VM"),
+                    None => {
+                        return Err(CompileErrorKind::UndefinedFunction(name.clone()).at(pos));
+                    }
+                };
+                self.chunk.emit(callee, pos);
+                self.temps += 1;
+                for arg in args {
+                    self.expr(arg)?;
+                    self.temps += 1;
+                }
+                self.temps -= args.len() + 1;
+                self.chunk.emit(Op::Call(args.len()), pos);
             }
             ExprKind::Unary { op, operand } => {
                 self.expr(operand)?;
@@ -187,7 +260,15 @@ impl Compiler {
                 let start = self.innermost_loop().start;
                 self.chunk.emit(Op::Jump(start), pos);
             }
-            ExprKind::Call { .. } | ExprKind::Return(_) => todo!("functions in the VM"),
+            ExprKind::Return(value) => {
+                match value {
+                    Some(value) => self.expr(value)?,
+                    None => {
+                        self.chunk.emit(Op::Unit, pos);
+                    }
+                }
+                self.chunk.emit(Op::Return, pos);
+            }
         }
         Ok(())
     }
@@ -259,7 +340,7 @@ mod tests {
 
     fn code(input: &str) -> Vec<Op> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        compile(&program).unwrap().code
+        compile(&program).unwrap().main.chunk.code.clone()
     }
 
     #[test]
@@ -469,10 +550,44 @@ mod tests {
     }
 
     #[test]
+    fn call_pushes_callee_then_arguments() {
+        assert_eq!(
+            code("fn add(a, b) { a + b } add(1, 2)"),
+            [Op::Function(0), Op::Int(1), Op::Int(2), Op::Call(2)]
+        );
+    }
+
+    #[test]
+    fn function_body_starts_with_parameters() {
+        let program = Parser::new(tokenize("fn add(a, b) { let c = a + b; c }").unwrap())
+            .parse()
+            .unwrap();
+        let bytecode = compile(&program).unwrap();
+        assert_eq!(
+            bytecode.functions[0].chunk.code,
+            [
+                Op::GetLocal(0),
+                Op::GetLocal(1),
+                Op::Binary(Add),
+                Op::DefineLocal,
+                Op::GetLocal(2),
+                Op::DropLocals(1),
+                Op::Return
+            ]
+        );
+    }
+
+    #[test]
     fn positions_follow_code() {
         let program = Parser::new(tokenize("1 +\n  2").unwrap()).parse().unwrap();
-        let chunk = compile(&program).unwrap();
-        let positions: Vec<String> = chunk.positions.iter().map(|p| p.to_string()).collect();
+        let bytecode = compile(&program).unwrap();
+        let positions: Vec<String> = bytecode
+            .main
+            .chunk
+            .positions
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
         assert_eq!(positions, ["1:1", "2:3", "1:3"]);
     }
 }

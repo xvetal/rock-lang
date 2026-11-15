@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::lexer::Pos;
 
@@ -15,12 +17,28 @@ pub enum Op {
     Binary(BinaryOp),
     Jump(usize),
     JumpIfFalse(usize),
+    Function(usize),
+    Call(usize),
+    Return,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Chunk {
     pub code: Vec<Op>,
     pub positions: Vec<Pos>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Function {
+    pub name: String,
+    pub arity: usize,
+    pub chunk: Chunk,
+}
+
+#[derive(Debug)]
+pub struct Bytecode {
+    pub main: Rc<Function>,
+    pub functions: Vec<Rc<Function>>,
 }
 
 impl Chunk {

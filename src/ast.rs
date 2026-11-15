@@ -87,6 +87,7 @@ pub struct Block {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnDecl {
     pub name: String,
+    pub pos: Pos,
     pub params: Vec<String>,
     pub body: Block,
 }

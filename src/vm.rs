@@ -1,10 +1,21 @@
-use crate::chunk::{Chunk, Op};
-use crate::interp::{RuntimeError, RuntimeErrorKind, binary, boolean, unary};
+use std::mem;
+use std::rc::Rc;
+
+use crate::chunk::{Bytecode, Function, Op};
+use crate::interp::{MAX_CALL_DEPTH, RuntimeError, RuntimeErrorKind, binary, boolean, unary};
 use crate::value::Value;
 
 pub struct Vm {
     stack: Vec<Value>,
     locals: Vec<Value>,
+    frames: Vec<Frame>,
+}
+
+struct Frame {
+    function: Rc<Function>,
+    ip: usize,
+    locals: usize,
+    stack: usize,
 }
 
 impl Vm {
@@ -12,18 +23,23 @@ impl Vm {
         Self {
             stack: Vec::new(),
             locals: Vec::new(),
+            frames: Vec::new(),
         }
     }
-
-    pub fn run(&mut self, chunk: &Chunk) -> Result<Value, RuntimeError> {
-        let mut ip = 0;
-        while let Some(op) = chunk.code.get(ip) {
-            let pos = chunk.positions[ip];
+    pub fn run(&mut self, bytecode: &Bytecode) -> Result<Value, RuntimeError> {
+        let mut frame = Frame {
+            function: Rc::clone(&bytecode.main),
+            ip: 0,
+            locals: 0,
+            stack: 0,
+        };
+        while let Some(op) = frame.function.chunk.code.get(frame.ip).cloned() {
+            let pos = frame.function.chunk.positions[frame.ip];
             let at = |kind: RuntimeErrorKind| kind.at(pos);
-            ip += 1;
+            frame.ip += 1;
             match op {
-                Op::Int(n) => self.stack.push(Value::Int(*n)),
-                Op::Bool(b) => self.stack.push(Value::Bool(*b)),
+                Op::Int(n) => self.stack.push(Value::Int(n)),
+                Op::Bool(b) => self.stack.push(Value::Bool(b)),
                 Op::Unit => self.stack.push(Value::Unit),
                 Op::Pop => {
                     self.pop();
@@ -32,23 +48,66 @@ impl Vm {
                     let value = self.pop();
                     self.locals.push(value);
                 }
-                Op::GetLocal(slot) => self.stack.push(self.locals[*slot].clone()),
-                Op::SetLocal(slot) => self.locals[*slot] = self.pop(),
+                Op::GetLocal(slot) => self.stack.push(self.locals[frame.locals + slot].clone()),
+                Op::SetLocal(slot) => self.locals[frame.locals + slot] = self.pop(),
                 Op::DropLocals(count) => self.locals.truncate(self.locals.len() - count),
                 Op::Unary(op) => {
                     let value = self.pop();
-                    self.stack.push(unary(op, value).map_err(at)?);
+                    self.stack.push(unary(&op, value).map_err(at)?);
                 }
                 Op::Binary(op) => {
                     let r = self.pop();
                     let l = self.pop();
-                    self.stack.push(binary(op, l, r).map_err(at)?);
+                    self.stack.push(binary(&op, l, r).map_err(at)?);
                 }
-                Op::Jump(target) => ip = *target,
+                Op::Jump(target) => frame.ip = target,
                 Op::JumpIfFalse(target) => {
                     if !boolean(self.pop()).map_err(at)? {
-                        ip = *target;
+                        frame.ip = target;
                     }
+                }
+                Op::Function(index) => {
+                    let function = Rc::clone(&bytecode.functions[index]);
+                    self.stack.push(Value::VmFunction(function));
+                }
+                Op::Call(argc) => {
+                    let args = self.stack.len() - argc;
+                    let function = match &self.stack[args - 1] {
+                        Value::VmFunction(function) => Rc::clone(function),
+                        found => {
+                            return Err(at(RuntimeErrorKind::TypeMismatch {
+                                expected: "function",
+                                found: found.clone(),
+                            }));
+                        }
+                    };
+                    if argc != function.arity {
+                        return Err(at(RuntimeErrorKind::ArgumentCount {
+                            name: function.name.clone(),
+                            expected: function.arity,
+                            found: argc,
+                        }));
+                    }
+                    if self.frames.len() == MAX_CALL_DEPTH {
+                        return Err(at(RuntimeErrorKind::StackOverflow));
+                    }
+                    let locals = self.locals.len();
+                    self.locals.extend(self.stack.drain(args..));
+                    self.pop();
+                    let callee = Frame {
+                        function,
+                        ip: 0,
+                        locals,
+                        stack: self.stack.len(),
+                    };
+                    self.frames.push(mem::replace(&mut frame, callee));
+                }
+                Op::Return => {
+                    let value = self.pop();
+                    self.stack.truncate(frame.stack);
+                    self.locals.truncate(frame.locals);
+                    frame = self.frames.pop().expect("main never returns");
+                    self.stack.push(value);
                 }
             }
         }
@@ -76,6 +135,11 @@ mod tests {
         let actual = Vm::new().run(&compile(&program).unwrap());
         assert_eq!(actual, expected, "VM and interpreter disagree on {input:?}");
         actual
+    }
+
+    fn vm(input: &str) -> Result<Value, RuntimeError> {
+        let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
+        Vm::new().run(&compile(&program).unwrap())
     }
 
     fn error(input: &str) -> String {
@@ -254,6 +318,94 @@ mod tests {
     }
 
     #[test]
+    fn functions() {
+        assert_eq!(agree("fn add(a, b) { a + b } add(1, 2)"), Ok(Value::Int(3)));
+        assert_eq!(agree("fn f() {} f()"), Ok(Value::Unit));
+        assert_eq!(
+            agree("fn fact(n) { if n <= 1 { 1 } else { n * fact(n - 1) } } fact(10)"),
+            Ok(Value::Int(3628800))
+        );
+        assert_eq!(
+            agree("fn f(x) { let y = x * 2; y + 1 } let a = 1; f(5) + a"),
+            Ok(Value::Int(12))
+        );
+    }
+
+    #[test]
+    fn mutual_recursion() {
+        assert_eq!(
+            agree(
+                "fn even(n) { if n == 0 { true } else { odd(n - 1) } }
+                 fn odd(n) { if n == 0 { false } else { even(n - 1) } }
+                 even(10)"
+            ),
+            Ok(Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn functions_are_visible_before_declaration() {
+        assert_eq!(vm("let x = f(); fn f() { 7 } x"), Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn return_from_function() {
+        assert_eq!(
+            agree("fn abs(x) { if x < 0 { return -x; } x } abs(-5) + abs(3)"),
+            Ok(Value::Int(8))
+        );
+        assert_eq!(
+            agree(
+                "fn root(n) { let i = 0; while true { if i * i >= n { return i; } i = i + 1; } } root(50)"
+            ),
+            Ok(Value::Int(8))
+        );
+        assert_eq!(agree("fn f() { return; 1 } f()"), Ok(Value::Unit));
+    }
+
+    #[test]
+    fn return_cleans_up_stacks() {
+        assert_eq!(
+            agree("fn f() { 1 + return 2; } 10 + f()"),
+            Ok(Value::Int(12))
+        );
+        assert_eq!(
+            agree("fn f() { let a = 1; { let b = 2; return a + b; } } let x = 5; f() + x"),
+            Ok(Value::Int(8))
+        );
+    }
+
+    #[test]
+    fn functions_are_values() {
+        assert_eq!(
+            agree("fn add(a, b) { a + b } let plus = add; plus(1, 2)"),
+            Ok(Value::Int(3))
+        );
+        assert_eq!(
+            agree("fn twice(f, x) { f(f(x)) } fn inc(x) { x + 1 } twice(inc, 5)"),
+            Ok(Value::Int(7))
+        );
+        assert_eq!(
+            vm("fn add(a, b) { a + b } add").unwrap().to_string(),
+            "<fn add>"
+        );
+    }
+
+    #[test]
+    fn variables_shadow_functions() {
+        assert_eq!(agree("fn f() { 1 } let f = 2; f"), Ok(Value::Int(2)));
+        assert_eq!(agree("fn f() { 1 } fn g(f) { f } g(5)"), Ok(Value::Int(5)));
+    }
+
+    #[test]
+    fn deep_recursion_needs_no_big_stack() {
+        assert_eq!(
+            vm("fn down(n) { if n == 1 { return 1; } down(n - 1) } down(1000)"),
+            Ok(Value::Int(1))
+        );
+    }
+
+    #[test]
     fn errors() {
         assert_eq!(error("1 +\n  true"), "1:3: expected integer, got true");
         assert_eq!(error("10 / (2 - 2)"), "1:4: division by zero");
@@ -265,6 +417,24 @@ mod tests {
         assert_eq!(error("if 1 { 2 }"), "1:4: expected bool, got 1");
         assert_eq!(error("{ 1 / 0; 2 }"), "1:5: division by zero");
         assert_eq!(error("while 1 { 2 }"), "1:7: expected bool, got 1");
+    }
+
+    #[test]
+    fn call_errors() {
+        assert_eq!(
+            error("fn add(a, b) { a + b } add(1)"),
+            "1:24: add expects 2 arguments, got 1"
+        );
+        assert_eq!(error("let f = 2; f()"), "1:12: expected function, got 2");
+        assert_eq!(error("fn f() {\n  1 / 0\n}\nf()"), "2:5: division by zero");
+    }
+
+    #[test]
+    fn stack_overflow() {
+        assert_eq!(
+            vm("fn f() { f() } f()").unwrap_err().to_string(),
+            "1:10: stack overflow: more than 1000 nested calls"
+        );
     }
 
     #[test]
@@ -284,6 +454,31 @@ mod tests {
             "1:16: undefined variable: a"
         );
         assert_eq!(compile_error("let x = x;"), "1:9: undefined variable: x");
+    }
+
+    #[test]
+    fn functions_do_not_see_outer_variables() {
+        assert_eq!(
+            compile_error("let base = 10; fn f(x) { base + x } f(1)"),
+            "1:26: undefined variable: base"
+        );
+        assert_eq!(
+            compile_error("fn f() { y } { let y = 1; f() }"),
+            "1:10: undefined variable: y"
+        );
+    }
+
+    #[test]
+    fn function_compile_errors() {
+        assert_eq!(compile_error("f()"), "1:1: undefined function: f");
+        assert_eq!(
+            compile_error("fn f() {} fn f() {}"),
+            "1:14: duplicate function: f"
+        );
+        assert_eq!(
+            compile_error("fn f() {} f = 1;"),
+            "1:11: undefined variable: f"
+        );
     }
 
     #[test]
