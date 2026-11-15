@@ -202,6 +202,68 @@ mod tests {
     }
 
     #[test]
+    fn while_loops() {
+        assert_eq!(
+            agree("let i = 0; let sum = 0; while i < 5 { i = i + 1; sum = sum + i; } sum"),
+            Ok(Value::Int(15))
+        );
+        assert_eq!(agree("while false { 1 }"), Ok(Value::Unit));
+        assert_eq!(
+            agree("let i = 0; while i < 3 { let j = i; i = j + 1; } i"),
+            Ok(Value::Int(3))
+        );
+    }
+
+    #[test]
+    fn break_and_continue() {
+        assert_eq!(
+            agree("let i = 0; while true { i = i + 1; if i == 4 { break; } } i"),
+            Ok(Value::Int(4))
+        );
+        assert_eq!(
+            agree(
+                "let i = 0; let sum = 0;
+                 while i < 5 { i = i + 1; if i == 3 { continue; } sum = sum + i; }
+                 sum"
+            ),
+            Ok(Value::Int(12))
+        );
+    }
+
+    #[test]
+    fn break_leaves_only_inner_loop() {
+        assert_eq!(
+            agree(
+                "let i = 0; let count = 0;
+                 while i < 3 {
+                     i = i + 1;
+                     let j = 0;
+                     while true { j = j + 1; if j == 2 { break; } count = count + 1; }
+                 }
+                 count"
+            ),
+            Ok(Value::Int(3))
+        );
+    }
+
+    #[test]
+    fn break_and_continue_clean_up_stacks() {
+        assert_eq!(agree("while true { 1 + break; };"), Ok(Value::Unit));
+        assert_eq!(
+            agree("let i = 0; while i < 3 { i = i + 1; 2 * { let a = i; continue; }; };"),
+            Ok(Value::Unit)
+        );
+        assert_eq!(
+            agree("while true { let a = 1; { let b = 2; break; } } { let c = 3; c }"),
+            Ok(Value::Int(3))
+        );
+        assert_eq!(
+            agree("let i = 0; while i < 3 { let a = i; i = i + 1; continue; } { let c = 7; c }"),
+            Ok(Value::Int(7))
+        );
+    }
+
+    #[test]
     fn errors() {
         assert_eq!(error("1 +\n  true"), "1:3: expected integer, got true");
         assert_eq!(error("10 / (2 - 2)"), "1:4: division by zero");
@@ -212,6 +274,7 @@ mod tests {
         assert_eq!(error("1 || true"), "1:3: expected bool, got 1");
         assert_eq!(error("if 1 { 2 }"), "1:4: expected bool, got 1");
         assert_eq!(error("{ 1 / 0; 2 }"), "1:5: division by zero");
+        assert_eq!(error("while 1 { 2 }"), "1:7: expected bool, got 1");
     }
 
     #[test]

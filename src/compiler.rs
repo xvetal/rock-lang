@@ -41,6 +41,8 @@ pub fn compile(program: &Program) -> Result<Chunk, CompileError> {
         globals: Vec::new(),
         locals: Vec::new(),
         depth: 0,
+        temps: 0,
+        loops: Vec::new(),
     };
     compiler.stmts(&program.stmts)?;
     if let Some(expr) = &program.expr {
@@ -54,11 +56,20 @@ struct Compiler {
     globals: Vec<String>,
     locals: Vec<String>,
     depth: usize,
+    temps: usize,
+    loops: Vec<Loop>,
 }
 
 enum Slot {
     Global(usize),
     Local(usize),
+}
+
+struct Loop {
+    start: usize,
+    temps: usize,
+    locals: usize,
+    breaks: Vec<usize>,
 }
 
 impl Compiler {
@@ -146,7 +157,9 @@ impl Compiler {
             }
             ExprKind::Binary { op, left, right } => {
                 self.expr(left)?;
+                self.temps += 1;
                 self.expr(right)?;
+                self.temps -= 1;
                 self.chunk.emit(Op::Binary(op.clone()), pos);
             }
             ExprKind::Logical { op, left, right } => self.logical(op, left, right, pos)?,
@@ -169,13 +182,57 @@ impl Compiler {
                 }
                 self.chunk.patch_jump(to_end);
             }
-            ExprKind::Call { .. }
-            | ExprKind::While { .. }
-            | ExprKind::Return(_)
-            | ExprKind::Break
-            | ExprKind::Continue => todo!("loops and functions in the VM"),
+            ExprKind::While { cond, body } => {
+                let start = self.chunk.code.len();
+                self.expr(cond)?;
+                let to_exit = self.chunk.emit(Op::JumpIfFalse(0), cond.pos);
+                self.loops.push(Loop {
+                    start,
+                    temps: self.temps,
+                    locals: self.locals.len(),
+                    breaks: Vec::new(),
+                });
+                self.block(body, pos)?;
+                self.chunk.emit(Op::Pop, pos);
+                self.chunk.emit(Op::Jump(start), pos);
+                let innermost = self.loops.pop().expect("pushed above");
+                self.chunk.patch_jump(to_exit);
+                for jump in innermost.breaks {
+                    self.chunk.patch_jump(jump);
+                }
+                self.chunk.emit(Op::Unit, pos);
+            }
+            ExprKind::Break => {
+                self.leave_loop_body(pos);
+                let jump = self.chunk.emit(Op::Jump(0), pos);
+                self.innermost_loop().breaks.push(jump);
+            }
+            ExprKind::Continue => {
+                self.leave_loop_body(pos);
+                let start = self.innermost_loop().start;
+                self.chunk.emit(Op::Jump(start), pos);
+            }
+            ExprKind::Call { .. } | ExprKind::Return(_) => todo!("functions in the VM"),
         }
         Ok(())
+    }
+
+    fn innermost_loop(&mut self) -> &mut Loop {
+        self.loops
+            .last_mut()
+            .expect("the parser rejects break and continue outside a loop")
+    }
+
+    fn leave_loop_body(&mut self, pos: Pos) {
+        let innermost = self.innermost_loop();
+        let (temps, locals) = (innermost.temps, innermost.locals);
+        for _ in temps..self.temps {
+            self.chunk.emit(Op::Pop, pos);
+        }
+        let count = self.locals.len() - locals;
+        if count > 0 {
+            self.chunk.emit(Op::DropLocals(count), pos);
+        }
     }
 
     // Both operands must be bools: every operand goes through JumpIfFalse,
@@ -372,6 +429,66 @@ mod tests {
                 Op::Binary(Add),
                 Op::DropLocals(1),
                 Op::DropLocals(1)
+            ]
+        );
+    }
+
+    #[test]
+    fn while_jumps_back_to_condition() {
+        assert_eq!(
+            code("let x = true; while x { x = false; }"),
+            [
+                Op::Bool(true),
+                Op::DefineGlobal,
+                Op::GetGlobal(0),
+                Op::JumpIfFalse(9),
+                Op::Bool(false),
+                Op::SetGlobal(0),
+                Op::Unit,
+                Op::Pop,
+                Op::Jump(2),
+                Op::Unit,
+            ]
+        );
+    }
+
+    #[test]
+    fn break_pops_temporaries() {
+        assert_eq!(
+            code("while true { 1 + break; }"),
+            [
+                Op::Bool(true),
+                Op::JumpIfFalse(10),
+                Op::Int(1),
+                Op::Pop,
+                Op::Jump(10),
+                Op::Binary(Add),
+                Op::Pop,
+                Op::Unit,
+                Op::Pop,
+                Op::Jump(0),
+                Op::Unit,
+            ]
+        );
+    }
+
+    #[test]
+    fn continue_drops_locals() {
+        assert_eq!(
+            code("while true { let a = 1; continue; }"),
+            [
+                Op::Bool(true),
+                Op::JumpIfFalse(11),
+                Op::Int(1),
+                Op::DefineLocal,
+                Op::DropLocals(1),
+                Op::Jump(0),
+                Op::Pop,
+                Op::Unit,
+                Op::DropLocals(1),
+                Op::Pop,
+                Op::Jump(0),
+                Op::Unit,
             ]
         );
     }
