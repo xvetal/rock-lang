@@ -4,7 +4,7 @@ A toy programming language written in Rust, built for learning.
 
 ## Status
 
-Version 0.6.0: `break` and `continue`, and runtime errors with line and column.
+Version 0.7.0: programs run on a bytecode virtual machine, and names are checked before the program runs.
 
 - Integer and boolean literals, `+ - * /`, unary minus, parentheses
 - Comparisons `== != < <= > >=` and logical `! && ||` with short-circuit
@@ -12,9 +12,9 @@ Version 0.6.0: `break` and `continue`, and runtime errors with line and column.
 - Variables with `let`, including shadowing, and assignment `x = value;`
 - Blocks with lexical scope; `if`/`else` and blocks are expressions
 - `while` loops with `break` and `continue`
-- Functions with `fn` and `return`, including recursion; functions are values
+- Functions with `fn` and `return`, including recursion; functions are values, can be called before their declaration, and see only their parameters and locals
 - The built-in `print`
-- Errors with line and column, both for parse errors and at runtime (division by zero, integer overflow, undefined names, type errors, stack overflow)
+- Errors with line and column: parse errors, compile errors (undefined names, duplicate functions, wrong `print` arguments), and runtime errors (division by zero, integer overflow, type errors, stack overflow)
 - Interactive REPL and running programs from a file
 
 ## Goals

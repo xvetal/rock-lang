@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-15
+
 ### Changed
 - Programs run on a bytecode virtual machine instead of the tree-walking interpreter
 - Undefined names are reported before the program runs, even in code that is never reached, e.g. `if false { y }`
