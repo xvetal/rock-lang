@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::mem;
 use std::rc::Rc;
 
@@ -5,7 +6,8 @@ use crate::chunk::{Bytecode, Function, Op};
 use crate::interp::{MAX_CALL_DEPTH, RuntimeError, RuntimeErrorKind, binary, boolean, unary};
 use crate::value::Value;
 
-pub struct Vm {
+pub struct Vm<W: Write> {
+    out: W,
     stack: Vec<Value>,
     locals: Vec<Value>,
     frames: Vec<Frame>,
@@ -18,9 +20,10 @@ struct Frame {
     stack: usize,
 }
 
-impl Vm {
-    pub fn new() -> Self {
+impl<W: Write> Vm<W> {
+    pub fn new(out: W) -> Self {
         Self {
+            out,
             stack: Vec::new(),
             locals: Vec::new(),
             frames: Vec::new(),
@@ -109,6 +112,12 @@ impl Vm {
                     frame = self.frames.pop().expect("main never returns");
                     self.stack.push(value);
                 }
+                Op::Print => {
+                    let value = self.pop();
+                    writeln!(self.out, "{value}")
+                        .map_err(|e| at(RuntimeErrorKind::Output(e.kind())))?;
+                    self.stack.push(Value::Unit);
+                }
             }
         }
         Ok(self.stack.pop().unwrap_or(Value::Unit))
@@ -129,17 +138,31 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::Parser;
 
-    fn agree(input: &str) -> Result<Value, RuntimeError> {
+    fn run_both(input: &str) -> (Result<Value, RuntimeError>, String) {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        let expected = Interpreter::new(Vec::new()).run(&program);
-        let actual = Vm::new().run(&compile(&program).unwrap());
+        let mut expected_out = Vec::new();
+        let expected = Interpreter::new(&mut expected_out).run(&program);
+        let mut actual_out = Vec::new();
+        let actual = Vm::new(&mut actual_out).run(&compile(&program).unwrap());
         assert_eq!(actual, expected, "VM and interpreter disagree on {input:?}");
-        actual
+        assert_eq!(
+            actual_out, expected_out,
+            "VM and interpreter print differently for {input:?}"
+        );
+        (actual, String::from_utf8(actual_out).unwrap())
+    }
+
+    fn agree(input: &str) -> Result<Value, RuntimeError> {
+        run_both(input).0
+    }
+
+    fn output(input: &str) -> String {
+        run_both(input).1
     }
 
     fn vm(input: &str) -> Result<Value, RuntimeError> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        Vm::new().run(&compile(&program).unwrap())
+        Vm::new(Vec::new()).run(&compile(&program).unwrap())
     }
 
     fn error(input: &str) -> String {
@@ -406,6 +429,26 @@ mod tests {
     }
 
     #[test]
+    fn print() {
+        assert_eq!(output("let x = 1 + 2 * 3; print(x);"), "7\n");
+        assert_eq!(output("print(false); print(print(1));"), "false\n1\n()\n");
+        assert_eq!(output("false && print(1); true || print(2);"), "");
+        assert_eq!(
+            output("let i = 0; while i < 3 { print(i); i = i + 1; }"),
+            "0\n1\n2\n"
+        );
+        assert_eq!(
+            output("fn hello(x) { print(x); } hello(1); hello(2);"),
+            "1\n2\n"
+        );
+    }
+
+    #[test]
+    fn functions_shadow_print() {
+        assert_eq!(output("fn print(x) { x } print(1);"), "");
+    }
+
+    #[test]
     fn errors() {
         assert_eq!(error("1 +\n  true"), "1:3: expected integer, got true");
         assert_eq!(error("10 / (2 - 2)"), "1:4: division by zero");
@@ -426,7 +469,18 @@ mod tests {
             "1:24: add expects 2 arguments, got 1"
         );
         assert_eq!(error("let f = 2; f()"), "1:12: expected function, got 2");
+        assert_eq!(
+            error("let print = 1; print(2)"),
+            "1:16: expected function, got 1"
+        );
         assert_eq!(error("fn f() {\n  1 / 0\n}\nf()"), "2:5: division by zero");
+    }
+
+    #[test]
+    fn output_before_error_is_kept() {
+        let (result, out) = run_both("print(1); print(1 / 0);");
+        assert_eq!(result.unwrap_err().to_string(), "1:19: division by zero");
+        assert_eq!(out, "1\n");
     }
 
     #[test]

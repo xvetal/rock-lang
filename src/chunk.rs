@@ -20,6 +20,7 @@ pub enum Op {
     Function(usize),
     Call(usize),
     Return,
+    Print,
 }
 
 #[derive(Debug, Default, PartialEq)]

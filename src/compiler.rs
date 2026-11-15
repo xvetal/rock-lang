@@ -22,6 +22,7 @@ pub enum CompileErrorKind {
     UndefinedVariable(String),
     UndefinedFunction(String),
     DuplicateFunction(String),
+    PrintArgumentCount(usize),
 }
 
 impl CompileErrorKind {
@@ -36,6 +37,9 @@ impl fmt::Display for CompileErrorKind {
             CompileErrorKind::UndefinedVariable(name) => write!(f, "undefined variable: {name}"),
             CompileErrorKind::UndefinedFunction(name) => write!(f, "undefined function: {name}"),
             CompileErrorKind::DuplicateFunction(name) => write!(f, "duplicate function: {name}"),
+            CompileErrorKind::PrintArgumentCount(found) => {
+                write!(f, "print expects 1 argument, got {found}")
+            }
         }
     }
 }
@@ -185,7 +189,7 @@ impl<'a> Compiler<'a> {
             ExprKind::Call { name, args } => {
                 let callee = match self.lookup(name) {
                     Some(op) => op,
-                    None if name == "print" => todo!("print in the VM"),
+                    None if name == "print" => return self.print(args, pos),
                     None => {
                         return Err(CompileErrorKind::UndefinedFunction(name.clone()).at(pos));
                     }
@@ -270,6 +274,15 @@ impl<'a> Compiler<'a> {
                 self.chunk.emit(Op::Return, pos);
             }
         }
+        Ok(())
+    }
+
+    fn print(&mut self, args: &[Expr], pos: Pos) -> Result<(), CompileError> {
+        let [value] = args else {
+            return Err(CompileErrorKind::PrintArgumentCount(args.len()).at(pos));
+        };
+        self.expr(value)?;
+        self.chunk.emit(Op::Print, pos);
         Ok(())
     }
 
@@ -575,6 +588,11 @@ mod tests {
                 Op::Return
             ]
         );
+    }
+
+    #[test]
+    fn print_compiles_to_instruction() {
+        assert_eq!(code("print(1)"), [Op::Int(1), Op::Print]);
     }
 
     #[test]
