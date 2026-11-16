@@ -1,7 +1,6 @@
 # TODO
 
 ## Checker
-- [ ] Warning for unused variables
 - [ ] Report several errors at once, together with warnings
 
 ## Parser

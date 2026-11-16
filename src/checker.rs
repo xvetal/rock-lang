@@ -84,6 +84,7 @@ impl fmt::Display for Warning {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum WarningKind {
+    UnusedVariable(String),
     UnusedMut(String),
 }
 
@@ -96,6 +97,7 @@ impl WarningKind {
 impl fmt::Display for WarningKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            WarningKind::UnusedVariable(name) => write!(f, "unused variable: {name}"),
             WarningKind::UnusedMut(name) => {
                 write!(f, "variable does not need to be mutable: {name}")
             }
@@ -115,6 +117,7 @@ struct Local {
     ty: Type,
     mutable: bool,
     assigned: bool,
+    used: bool,
     pos: Pos,
 }
 
@@ -125,13 +128,21 @@ impl Local {
             ty,
             mutable,
             assigned: false,
+            used: false,
             pos,
         }
     }
 
-    fn unused_mut(&self) -> Option<Warning> {
-        (self.mutable && !self.assigned)
-            .then(|| WarningKind::UnusedMut(self.name.clone()).at(self.pos))
+    // Names starting with `_` are allowed to stay unused.
+    fn warnings(&self) -> Vec<Warning> {
+        let mut warnings = Vec::new();
+        if !self.used && !self.name.starts_with('_') {
+            warnings.push(WarningKind::UnusedVariable(self.name.clone()).at(self.pos));
+        }
+        if self.mutable && !self.assigned {
+            warnings.push(WarningKind::UnusedMut(self.name.clone()).at(self.pos));
+        }
+        warnings
     }
 }
 
@@ -174,7 +185,7 @@ pub fn check(program: &Program, env: &Env) -> Result<(Env, Vec<Warning>), CheckE
 
 // Warnings for top-level variables, once no more code can use them.
 pub fn finish(env: &Env) -> Vec<Warning> {
-    env.locals.iter().filter_map(Local::unused_mut).collect()
+    env.locals.iter().flat_map(Local::warnings).collect()
 }
 
 fn function(decl: &FnDecl, functions: &[(String, Type)]) -> Result<Vec<Warning>, CheckError> {
@@ -284,11 +295,10 @@ impl<'a> Checker<'a> {
         Ok(ty)
     }
 
-    // Drops the locals declared since `outer` and warns about unused `mut`.
+    // Drops the locals declared since `outer` and warns about the unused ones.
     fn end_scope(&mut self, outer: usize) {
         let ended = self.locals.split_off(outer);
-        self.warnings
-            .extend(ended.iter().filter_map(Local::unused_mut));
+        self.warnings.extend(ended.iter().flat_map(Local::warnings));
     }
 
     fn local(&mut self, name: &str) -> Option<&mut Local> {
@@ -297,6 +307,7 @@ impl<'a> Checker<'a> {
 
     fn lookup(&mut self, name: &str) -> Option<Type> {
         if let Some(local) = self.local(name) {
+            local.used = true;
             return Some(local.ty.clone());
         }
         let (_, ty) = self.functions.iter().rfind(|(n, _)| n == name)?;
@@ -487,12 +498,13 @@ mod tests {
     }
 
     #[test]
-    fn assigned_mut_is_not_warned() {
+    fn used_variables_are_not_warned() {
         for input in [
-            "let mut x = 1; x = 2;",
+            "let mut x = 1; x = 2; x",
             "let mut i = 0; while i < 3 { i = i + 1; }",
             "fn f(mut n: int) -> int { n = n + 1; n }",
-            "let x = 1; { let mut y = x; y = 2; }",
+            "let x = 1; { let mut y = x; y = 2; y }",
+            "fn f(g: fn()) { g() }",
         ] {
             assert_eq!(warnings(input), [] as [String; 0], "{input}");
         }
@@ -509,11 +521,11 @@ mod tests {
             ["1:10: variable does not need to be mutable: n"]
         );
         assert_eq!(
-            warnings("let mut x = 1; let mut x = 2; x = 3;"),
+            warnings("let mut x = 1; let mut x = x; x = 3; x"),
             ["1:9: variable does not need to be mutable: x"]
         );
         assert_eq!(
-            warnings("let mut x = 1; { let mut y = 2; }"),
+            warnings("let mut x = 1; { let mut y = x; y }"),
             [
                 "1:26: variable does not need to be mutable: y",
                 "1:9: variable does not need to be mutable: x"
@@ -522,8 +534,40 @@ mod tests {
     }
 
     #[test]
+    fn unused_variables() {
+        assert_eq!(warnings("let x = 1;"), ["1:5: unused variable: x"]);
+        assert_eq!(warnings("fn f(n: int) {}"), ["1:6: unused variable: n"]);
+        assert_eq!(
+            warnings("let mut x = 1; x = 2;"),
+            ["1:9: unused variable: x"]
+        );
+        assert_eq!(
+            warnings("let x = 1; let x = 2; x"),
+            ["1:5: unused variable: x"]
+        );
+        assert_eq!(
+            warnings("let mut x = 1;"),
+            [
+                "1:9: unused variable: x",
+                "1:9: variable does not need to be mutable: x"
+            ]
+        );
+    }
+
+    #[test]
+    fn underscore_allows_unused_variables() {
+        for input in ["let _x = 1;", "let _ = 1;", "fn f(_n: int) {}"] {
+            assert_eq!(warnings(input), [] as [String; 0], "{input}");
+        }
+        assert_eq!(
+            warnings("let mut _x = 1;"),
+            ["1:9: variable does not need to be mutable: _x"]
+        );
+    }
+
+    #[test]
     fn top_level_warnings_wait_for_finish() {
-        let (env, warnings) = check(&parse("let mut x = 1;"), &Env::default()).unwrap();
+        let (env, warnings) = check(&parse("let mut x = 1; x"), &Env::default()).unwrap();
         assert_eq!(warnings, []);
         assert_eq!(finish(&env).len(), 1);
         let (env, _) = check(&parse("x = 2;"), &env).unwrap();

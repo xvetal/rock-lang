@@ -5,6 +5,7 @@
 ### Added
 - `mut` parameters: `fn f(mut n: int)` lets the function assign to `n`; the caller's value is not affected
 - Warnings: a variable declared `mut` but never assigned is reported as `warning: 1:9: variable does not need to be mutable: x`; the program still runs. `rock run`, `rock check` and the REPL print warnings to stderr
+- Warning for unused variables and parameters: `warning: 1:5: unused variable: x`; assigning a variable does not count as using it. Names starting with `_` are allowed to stay unused
 
 ## [0.8.0] - 2026-11-16
 
