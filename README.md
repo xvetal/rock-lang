@@ -4,18 +4,19 @@ A toy programming language written in Rust, built for learning.
 
 ## Status
 
-Version 0.7.0: programs run on a bytecode virtual machine, and names are checked before the program runs.
+Version 0.8.0: programs are statically typed and type-checked before they run, then executed on a bytecode virtual machine.
 
 - Integer and boolean literals, `+ - * /`, unary minus, parentheses
 - Comparisons `== != < <= > >=` and logical `! && ||` with short-circuit
 - Operator precedence and left associativity
-- Variables with `let`, including shadowing, and assignment `x = value;`
+- Variables with `let`, immutable unless declared with `let mut`, including shadowing, and assignment `x = value;`
 - Blocks with lexical scope; `if`/`else` and blocks are expressions
 - `while` loops with `break` and `continue`
-- Functions with `fn` and `return`, including recursion; functions are values, can be called before their declaration, and see only their parameters and locals
+- Functions with `fn` and `return`, including recursion; parameters and return values have types, e.g. `fn add(a: int, b: int) -> int`; functions are values, can be called before their declaration, and see only their parameters and locals
 - The built-in `print`
-- Errors with line and column: parse errors, compile errors (undefined names, duplicate functions, wrong `print` arguments), and runtime errors (division by zero, integer overflow, type errors, stack overflow)
-- Interactive REPL and running programs from a file
+- Static types `int`, `bool`, `()` and function types such as `fn(int) -> int`
+- Errors with line and column: parse errors, type errors (mismatched types, undefined names, wrong argument counts, assignment to immutable variables), and runtime errors (division by zero, integer overflow, stack overflow)
+- Interactive REPL, running programs from a file, and checking them without running with `rock check`
 
 ## Goals
 

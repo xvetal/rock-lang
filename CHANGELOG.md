@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-16
+
 ### Added
 - Programs are type-checked before they run: mismatched types, wrong argument counts and calls of non-functions are reported with their position, even in code that is never reached. The REPL remembers the types of earlier lines
 - `rock check <file>` reports parse and type errors without running the program
