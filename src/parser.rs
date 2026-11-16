@@ -65,6 +65,7 @@ pub struct Parser {
     pos: usize,
     in_fn: bool,
     in_loop: bool,
+    errors: Vec<ParseError>,
 }
 
 impl Parser {
@@ -74,19 +75,23 @@ impl Parser {
             pos: 0,
             in_fn: false,
             in_loop: false,
+            errors: Vec::new(),
         }
     }
 
-    pub fn parse(&mut self) -> Result<Program, ParseError> {
-        let (stmts, expr) = self.sequence(true)?;
-        if self.peek() != &Token::Eof {
-            return Err(ParseErrorKind::Unexpected(self.peek().clone()).at(self.peek_pos()));
+    // Parses the whole program. On a syntax error the parser skips to the next
+    // statement and goes on, so it returns all errors, not only the first.
+    pub fn parse(mut self) -> Result<Program, Vec<ParseError>> {
+        let (stmts, expr) = self.sequence(true);
+        if self.errors.is_empty() {
+            Ok(Program { stmts, expr })
+        } else {
+            Err(self.errors)
         }
-        Ok(Program { stmts, expr })
     }
 
     fn block(&mut self) -> Result<Block, ParseError> {
-        let (stmts, expr) = self.sequence(false)?;
+        let (stmts, expr) = self.sequence(false);
         self.expect(Token::RBrace, "'}'")?;
         Ok(Block {
             stmts,
@@ -94,34 +99,95 @@ impl Parser {
         })
     }
 
-    fn sequence(&mut self, top_level: bool) -> Result<(Vec<Stmt>, Option<Expr>), ParseError> {
+    // Stops at the end of input or, inside a block, at `}`. Errors in the
+    // statements are recorded, so a block always fails only at the end of input.
+    fn sequence(&mut self, top_level: bool) -> (Vec<Stmt>, Option<Expr>) {
         let mut stmts = Vec::new();
         loop {
-            match self.peek() {
-                Token::Eof | Token::RBrace => return Ok((stmts, None)),
-                Token::Let => stmts.push(self.let_stmt()?),
-                Token::Fn if top_level => stmts.push(self.fn_decl()?),
-                Token::Fn => return Err(ParseErrorKind::NestedFn.at(self.peek_pos())),
+            let start = self.pos;
+            let pos = self.peek_pos();
+            let stmt = match self.peek() {
+                Token::Eof => return (stmts, None),
+                Token::RBrace if !top_level => return (stmts, None),
+                Token::RBrace => Err(ParseErrorKind::Unexpected(Token::RBrace).at(pos)),
+                Token::Let => self.let_stmt(),
+                Token::Fn if top_level => self.fn_decl(),
+                Token::Fn => Err(ParseErrorKind::NestedFn.at(pos)),
                 Token::Ident(name) if self.peek_next() == &Token::Eq => {
                     let name = name.clone();
-                    stmts.push(self.assign_stmt(name)?);
+                    self.assign_stmt(name)
                 }
-                _ => {
-                    let value = self.expr()?;
-                    if self.peek() == &Token::Semicolon {
-                        self.advance();
-                        stmts.push(Stmt::Expr(value));
-                    } else if matches!(
-                        value.kind,
-                        ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::While { .. }
-                    ) && !matches!(self.peek(), Token::Eof | Token::RBrace)
-                    {
-                        stmts.push(Stmt::Expr(value));
-                    } else {
-                        return Ok((stmts, Some(value)));
+                _ => match self.expr() {
+                    Ok(value) => {
+                        let pos = self.peek_pos();
+                        match self.peek() {
+                            Token::Semicolon => {
+                                self.advance();
+                                Ok(Stmt::Expr(value))
+                            }
+                            Token::Eof => return (stmts, Some(value)),
+                            Token::RBrace if !top_level => return (stmts, Some(value)),
+                            // A stray `}` is reported on the next iteration.
+                            Token::RBrace => Ok(Stmt::Expr(value)),
+                            _ if matches!(
+                                value.kind,
+                                ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::While { .. }
+                            ) =>
+                            {
+                                Ok(Stmt::Expr(value))
+                            }
+                            token if top_level => {
+                                Err(ParseErrorKind::Unexpected(token.clone()).at(pos))
+                            }
+                            token => Err(ParseErrorKind::Expected {
+                                what: "'}'",
+                                found: token.clone(),
+                            }
+                            .at(pos)),
+                        }
                     }
-                }
+                    Err(error) => Err(error),
+                },
+            };
+            match stmt {
+                Ok(stmt) => stmts.push(stmt),
+                Err(error) => self.recover(error, start),
             }
+        }
+    }
+
+    // Records the error and skips the rest of the broken statement: up to and
+    // including `;`, or up to `}`, `let` or `fn`, unless they are nested in braces.
+    fn recover(&mut self, error: ParseError, start: usize) {
+        // The failed rule may have consumed the token it complains about.
+        // Step back to it: it may be the `;` or `}` to stop at.
+        while self.peek_pos() > error.pos {
+            self.pos -= 1;
+        }
+        // If the statement fails on its first token, skip that token,
+        // otherwise the same error would repeat forever.
+        if self.pos == start {
+            self.advance();
+        }
+        // An unclosed block fails at the end of input in every enclosing
+        // block too. Report it once.
+        if self.errors.last().is_none_or(|last| last.pos != error.pos) {
+            self.errors.push(error);
+        }
+        let mut depth = 0;
+        loop {
+            match self.peek() {
+                Token::Eof => return,
+                Token::Semicolon if depth == 0 => {
+                    self.advance();
+                    return;
+                }
+                Token::RBrace | Token::Let | Token::Fn if depth == 0 => return,
+                Token::LBrace => depth += 1,
+                Token::RBrace => depth -= 1,
+                _ => {}
+            }
+            self.advance();
         }
     }
 
@@ -523,8 +589,15 @@ mod tests {
 
     const NO_POS: Pos = Pos { line: 0, col: 0 };
 
+    // Requires exactly one error if parsing fails: the old error tests also
+    // check that recovery does not report extra errors.
     fn parse_program(input: &str) -> Result<Program, ParseError> {
-        let mut program = Parser::new(tokenize(input).unwrap()).parse()?;
+        let mut program = Parser::new(tokenize(input).unwrap())
+            .parse()
+            .map_err(|errors| match <[ParseError; 1]>::try_from(errors) {
+                Ok([error]) => error,
+                Err(errors) => panic!("{input}: expected one error, got {errors:?}"),
+            })?;
         program.stmts.iter_mut().for_each(strip_stmt);
         program.expr.iter_mut().for_each(strip);
         Ok(program)
@@ -585,6 +658,11 @@ mod tests {
                 strip_block(&mut decl.body);
             }
         }
+    }
+
+    fn errors(input: &str) -> Vec<String> {
+        let errors = Parser::new(tokenize(input).unwrap()).parse().unwrap_err();
+        errors.iter().map(ToString::to_string).collect()
     }
 
     fn parse(input: &str) -> Result<Expr, ParseError> {
@@ -1783,6 +1861,58 @@ mod tests {
         assert_eq!(
             parse_program("fn f() -> {}"),
             Err(at(expected("type", Token::LBrace), 1, 11))
+        );
+    }
+
+    #[test]
+    fn several_errors() {
+        assert_eq!(
+            errors("let x = ;\nlet y = 1 +;\nx = (2;"),
+            [
+                "1:9: expected expression, found ';'",
+                "2:12: expected expression, found ';'",
+                "3:7: expected ')', found ';'"
+            ]
+        );
+        assert_eq!(
+            errors("fn f(a) { 1 }\nfn g() -> int { 1 2 }\nf(1"),
+            [
+                "1:7: expected ':', found ')'",
+                "2:19: expected '}', found '2'",
+                "3:4: expected ',' or ')', found end of input"
+            ]
+        );
+    }
+
+    #[test]
+    fn errors_inside_blocks() {
+        assert_eq!(
+            errors("fn f() { let a = ; return 1; }\nwhile true { 1 + ; break; }\nbreak;"),
+            [
+                "1:18: expected expression, found ';'",
+                "2:18: expected expression, found ';'",
+                "3:1: 'break' outside of a loop"
+            ]
+        );
+    }
+
+    #[test]
+    fn recovery_skips_nested_braces() {
+        assert_eq!(
+            errors("fn (a: int) { if a { 1 } }\nlet x 2;\n) ) 1;"),
+            [
+                "1:4: expected function name after 'fn', found '('",
+                "2:7: expected '=', found '2'",
+                "3:1: expected expression, found ')'"
+            ]
+        );
+    }
+
+    #[test]
+    fn unclosed_block_is_reported_once() {
+        assert_eq!(
+            errors("fn f() { while true { if x { 1"),
+            ["1:31: expected '}', found end of input"]
         );
     }
 }

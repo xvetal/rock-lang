@@ -109,6 +109,12 @@ impl From<String> for Errors {
     }
 }
 
+impl<E: ToString> From<Vec<E>> for Errors {
+    fn from(errors: Vec<E>) -> Self {
+        Errors(errors.iter().map(ToString::to_string).collect())
+    }
+}
+
 fn report(result: Result<Value, Errors>) -> ExitCode {
     match result {
         Ok(Value::Unit) => ExitCode::SUCCESS,
@@ -130,7 +136,7 @@ fn diagnose(errors: Vec<CheckError>, warnings: Vec<Warning>) -> Result<(), Error
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(Errors(errors.iter().map(|e| e.to_string()).collect()))
+        Err(errors.into())
     }
 }
 
@@ -156,11 +162,9 @@ fn run(
     Ok(value)
 }
 
-fn check(source: &str, env: &Env) -> Result<(Program, Checked), String> {
+fn check(source: &str, env: &Env) -> Result<(Program, Checked), Errors> {
     let tokens = lexer::tokenize(source)?;
-    let program = parser::Parser::new(tokens)
-        .parse()
-        .map_err(|e| e.to_string())?;
+    let program = parser::Parser::new(tokens).parse()?;
     let checked = checker::check(&program, env);
     Ok((program, checked))
 }
