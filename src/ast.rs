@@ -124,6 +124,7 @@ pub struct Param {
     pub name: String,
     pub mutable: bool,
     pub ty: Type,
+    pub pos: Pos,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -150,6 +151,7 @@ pub enum Stmt {
         name: String,
         mutable: bool,
         value: Expr,
+        pos: Pos,
     },
     Assign {
         name: String,

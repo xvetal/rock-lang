@@ -16,7 +16,7 @@ use std::process::ExitCode;
 use std::thread;
 
 use ast::Program;
-use checker::Env;
+use checker::{Env, Warning};
 use compiler::Scope;
 use value::Value;
 use vm::Vm;
@@ -42,7 +42,7 @@ fn cli() -> ExitCode {
             ExitCode::SUCCESS
         }
         [_, cmd, path] if cmd == "run" => report(run_file(path)),
-        [_, cmd, path] if cmd == "check" => report(check_file(path).map(|()| Value::Unit)),
+        [_, cmd, path] if cmd == "check" => report(check_file(path).map(|_| Value::Unit)),
         _ => {
             eprintln!("usage: rock [run <file> | check <file>]");
             ExitCode::from(2)
@@ -83,20 +83,20 @@ fn read(path: &str) -> Result<String, String> {
 }
 
 fn run_file(path: &str) -> Result<Value, String> {
-    let source = read(path)?;
-    run(
-        &mut Vm::new(io::stdout()),
-        &mut Env::default(),
-        &mut Scope::default(),
-        &source,
-    )
+    let program = check_file(path)?;
+    let bytecode = compiler::compile(&program, &Scope::default());
+    Vm::new(io::stdout())
+        .run(&bytecode)
+        .map_err(|e| e.to_string())
 }
 
-// Reports parse and type errors without compiling or running the program.
-fn check_file(path: &str) -> Result<(), String> {
+// Reports parse and type errors and warnings without compiling or running the program.
+fn check_file(path: &str) -> Result<Program, String> {
     let source = read(path)?;
-    check(&source, &Env::default())?;
-    Ok(())
+    let (program, env, mut warnings) = check(&source, &Env::default())?;
+    warnings.extend(checker::finish(&env));
+    warn(warnings);
+    Ok(program)
 }
 
 fn report(result: Result<Value, String>) -> ExitCode {
@@ -113,13 +113,21 @@ fn report(result: Result<Value, String>) -> ExitCode {
     }
 }
 
+fn warn(mut warnings: Vec<Warning>) {
+    warnings.sort_by_key(|w| w.pos);
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
+}
+
 fn run(
     vm: &mut Vm<io::Stdout>,
     env: &mut Env,
     scope: &mut Scope,
     source: &str,
 ) -> Result<Value, String> {
-    let (program, checked) = check(source, env)?;
+    let (program, checked, warnings) = check(source, env)?;
+    warn(warnings);
     let bytecode = compiler::compile(&program, scope);
     let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
     *env = checked;
@@ -127,11 +135,11 @@ fn run(
     Ok(value)
 }
 
-fn check(source: &str, env: &Env) -> Result<(Program, Env), String> {
+fn check(source: &str, env: &Env) -> Result<(Program, Env, Vec<Warning>), String> {
     let tokens = lexer::tokenize(source)?;
     let program = parser::Parser::new(tokens)
         .parse()
         .map_err(|e| e.to_string())?;
-    let checked = checker::check(&program, env).map_err(|e| e.to_string())?;
-    Ok((program, checked))
+    let (checked, warnings) = checker::check(&program, env).map_err(|e| e.to_string())?;
+    Ok((program, checked, warnings))
 }

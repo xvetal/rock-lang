@@ -83,7 +83,7 @@ impl fmt::Display for Token {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Pos {
     pub line: usize,
     pub col: usize,

@@ -70,6 +70,39 @@ impl fmt::Display for CheckErrorKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Warning {
+    pub kind: WarningKind,
+    pub pos: Pos,
+}
+
+impl fmt::Display for Warning {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}: {}", self.pos, self.kind)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum WarningKind {
+    UnusedMut(String),
+}
+
+impl WarningKind {
+    fn at(self, pos: Pos) -> Warning {
+        Warning { kind: self, pos }
+    }
+}
+
+impl fmt::Display for WarningKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            WarningKind::UnusedMut(name) => {
+                write!(f, "variable does not need to be mutable: {name}")
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Env {
     locals: Vec<Local>,
@@ -81,9 +114,30 @@ struct Local {
     name: String,
     ty: Type,
     mutable: bool,
+    assigned: bool,
+    pos: Pos,
 }
 
-pub fn check(program: &Program, env: &Env) -> Result<Env, CheckError> {
+impl Local {
+    fn new(name: &str, ty: Type, mutable: bool, pos: Pos) -> Self {
+        Self {
+            name: name.to_string(),
+            ty,
+            mutable,
+            assigned: false,
+            pos,
+        }
+    }
+
+    fn unused_mut(&self) -> Option<Warning> {
+        (self.mutable && !self.assigned)
+            .then(|| WarningKind::UnusedMut(self.name.clone()).at(self.pos))
+    }
+}
+
+// Checks the program and returns the updated environment and the warnings
+// for scopes that ended. Top-level variables stay in scope; see `finish`.
+pub fn check(program: &Program, env: &Env) -> Result<(Env, Vec<Warning>), CheckError> {
     let decls: Vec<&FnDecl> = program
         .stmts
         .iter()
@@ -100,8 +154,9 @@ pub fn check(program: &Program, env: &Env) -> Result<Env, CheckError> {
 
     let mut functions = env.functions.clone();
     functions.extend(decls.iter().map(|decl| (decl.name.clone(), decl.ty())));
+    let mut warnings = Vec::new();
     for decl in &decls {
-        function(decl, &functions)?;
+        warnings.extend(function(decl, &functions)?);
     }
 
     let mut checker = Checker::new(&functions, env.locals.clone(), Type::Unit);
@@ -109,25 +164,30 @@ pub fn check(program: &Program, env: &Env) -> Result<Env, CheckError> {
     if let Some(expr) = &program.expr {
         checker.expr(expr)?;
     }
-    Ok(Env {
+    warnings.extend(checker.warnings);
+    let env = Env {
         locals: checker.locals,
         functions,
-    })
+    };
+    Ok((env, warnings))
 }
 
-fn function(decl: &FnDecl, functions: &[(String, Type)]) -> Result<(), CheckError> {
+// Warnings for top-level variables, once no more code can use them.
+pub fn finish(env: &Env) -> Vec<Warning> {
+    env.locals.iter().filter_map(Local::unused_mut).collect()
+}
+
+fn function(decl: &FnDecl, functions: &[(String, Type)]) -> Result<Vec<Warning>, CheckError> {
     let params = decl
         .params
         .iter()
-        .map(|p| Local {
-            name: p.name.clone(),
-            ty: p.ty.clone(),
-            mutable: p.mutable,
-        })
+        .map(|p| Local::new(&p.name, p.ty.clone(), p.mutable, p.pos))
         .collect();
     let mut checker = Checker::new(functions, params, decl.ret.clone());
     let body = checker.block(&decl.body)?;
-    expect(&decl.ret, &body, block_value_pos(&decl.body, decl.pos))
+    expect(&decl.ret, &body, block_value_pos(&decl.body, decl.pos))?;
+    checker.end_scope(0);
+    Ok(checker.warnings)
 }
 
 fn value_pos(expr: &Expr) -> Pos {
@@ -166,6 +226,7 @@ struct Checker<'a> {
     locals: Vec<Local>,
     ret: Type,
     diverges: bool,
+    warnings: Vec<Warning>,
 }
 
 impl<'a> Checker<'a> {
@@ -175,6 +236,7 @@ impl<'a> Checker<'a> {
             locals,
             ret,
             diverges: false,
+            warnings: Vec::new(),
         }
     }
 
@@ -185,13 +247,10 @@ impl<'a> Checker<'a> {
                     name,
                     mutable,
                     value,
+                    pos,
                 } => {
                     let ty = self.expr(value)?;
-                    self.locals.push(Local {
-                        name: name.clone(),
-                        ty,
-                        mutable: *mutable,
-                    });
+                    self.locals.push(Local::new(name, ty, *mutable, *pos));
                 }
                 Stmt::Assign { name, value, pos } => {
                     let found = self.expr(value)?;
@@ -201,6 +260,7 @@ impl<'a> Checker<'a> {
                     if !local.mutable {
                         return Err(CheckErrorKind::AssignToImmutable(name.clone()).at(*pos));
                     }
+                    local.assigned = true;
                     expect(&local.ty, &found, value_pos(value))?;
                 }
                 Stmt::Expr(expr) => {
@@ -220,15 +280,22 @@ impl<'a> Checker<'a> {
             None if self.diverges => Type::Never,
             None => Type::Unit,
         };
-        self.locals.truncate(outer);
+        self.end_scope(outer);
         Ok(ty)
     }
 
-    fn local(&self, name: &str) -> Option<&Local> {
-        self.locals.iter().rfind(|local| local.name == name)
+    // Drops the locals declared since `outer` and warns about unused `mut`.
+    fn end_scope(&mut self, outer: usize) {
+        let ended = self.locals.split_off(outer);
+        self.warnings
+            .extend(ended.iter().filter_map(Local::unused_mut));
     }
 
-    fn lookup(&self, name: &str) -> Option<Type> {
+    fn local(&mut self, name: &str) -> Option<&mut Local> {
+        self.locals.iter_mut().rfind(|local| local.name == name)
+    }
+
+    fn lookup(&mut self, name: &str) -> Option<Type> {
         if let Some(local) = self.local(name) {
             return Some(local.ty.clone());
         }
@@ -377,9 +444,19 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::Parser;
 
-    fn check_program(input: &str) -> Result<Env, CheckError> {
-        let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        check(&program, &Env::default())
+    fn parse(input: &str) -> Program {
+        Parser::new(tokenize(input).unwrap()).parse().unwrap()
+    }
+
+    fn check_program(input: &str) -> Result<Vec<Warning>, CheckError> {
+        let (env, mut warnings) = check(&parse(input), &Env::default())?;
+        warnings.extend(finish(&env));
+        Ok(warnings)
+    }
+
+    fn warnings(input: &str) -> Vec<String> {
+        let warnings = check_program(input).unwrap();
+        warnings.iter().map(|w| w.to_string()).collect()
     }
 
     fn error(input: &str) -> String {
@@ -407,6 +484,50 @@ mod tests {
         ] {
             assert!(check_program(input).is_ok(), "{input}");
         }
+    }
+
+    #[test]
+    fn assigned_mut_is_not_warned() {
+        for input in [
+            "let mut x = 1; x = 2;",
+            "let mut i = 0; while i < 3 { i = i + 1; }",
+            "fn f(mut n: int) -> int { n = n + 1; n }",
+            "let x = 1; { let mut y = x; y = 2; }",
+        ] {
+            assert_eq!(warnings(input), [] as [String; 0], "{input}");
+        }
+    }
+
+    #[test]
+    fn unused_mut() {
+        assert_eq!(
+            warnings("let mut x = 1; x"),
+            ["1:9: variable does not need to be mutable: x"]
+        );
+        assert_eq!(
+            warnings("fn f(mut n: int) -> int { n }"),
+            ["1:10: variable does not need to be mutable: n"]
+        );
+        assert_eq!(
+            warnings("let mut x = 1; let mut x = 2; x = 3;"),
+            ["1:9: variable does not need to be mutable: x"]
+        );
+        assert_eq!(
+            warnings("let mut x = 1; { let mut y = 2; }"),
+            [
+                "1:26: variable does not need to be mutable: y",
+                "1:9: variable does not need to be mutable: x"
+            ]
+        );
+    }
+
+    #[test]
+    fn top_level_warnings_wait_for_finish() {
+        let (env, warnings) = check(&parse("let mut x = 1;"), &Env::default()).unwrap();
+        assert_eq!(warnings, []);
+        assert_eq!(finish(&env).len(), 1);
+        let (env, _) = check(&parse("x = 2;"), &env).unwrap();
+        assert_eq!(finish(&env), []);
     }
 
     #[test]

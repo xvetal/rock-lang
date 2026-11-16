@@ -1,7 +1,8 @@
 # TODO
 
 ## Checker
-- [ ] Warnings, starting with unused `mut`
+- [ ] Warning for unused variables
+- [ ] Report several errors at once, together with warnings
 
 ## Parser
 - [ ] Limit nesting depth to avoid stack overflow on deeply nested input

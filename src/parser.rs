@@ -128,6 +128,7 @@ impl Parser {
     fn let_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.advance();
         let mutable = self.mutable();
+        let pos = self.peek_pos();
         let name = self.ident("variable name after 'let'")?;
         self.expect(Token::Eq, "'='")?;
         let value = self.expr()?;
@@ -136,6 +137,7 @@ impl Parser {
             name,
             mutable,
             value,
+            pos,
         })
     }
 
@@ -161,10 +163,16 @@ impl Parser {
 
     fn param(&mut self) -> Result<Param, ParseError> {
         let mutable = self.mutable();
+        let pos = self.peek_pos();
         let name = self.ident("parameter name")?;
         self.expect(Token::Colon, "':'")?;
         let ty = self.ty()?;
-        Ok(Param { name, mutable, ty })
+        Ok(Param {
+            name,
+            mutable,
+            ty,
+            pos,
+        })
     }
 
     fn ret_type(&mut self) -> Result<Type, ParseError> {
@@ -566,13 +574,14 @@ mod tests {
 
     fn strip_stmt(stmt: &mut Stmt) {
         match stmt {
-            Stmt::Let { value, .. } | Stmt::Expr(value) => strip(value),
-            Stmt::Assign { value, pos, .. } => {
+            Stmt::Expr(value) => strip(value),
+            Stmt::Let { value, pos, .. } | Stmt::Assign { value, pos, .. } => {
                 *pos = NO_POS;
                 strip(value);
             }
             Stmt::Fn(decl) => {
                 decl.pos = NO_POS;
+                decl.params.iter_mut().for_each(|p| p.pos = NO_POS);
                 strip_block(&mut decl.body);
             }
         }
@@ -608,6 +617,7 @@ mod tests {
             name: name.to_string(),
             mutable: false,
             value,
+            pos: NO_POS,
         }
     }
 
@@ -686,6 +696,7 @@ mod tests {
                     name: name.to_string(),
                     mutable: false,
                     ty: ty.clone(),
+                    pos: NO_POS,
                 })
                 .collect(),
             ret,
@@ -1337,6 +1348,7 @@ mod tests {
                     name: "x".to_string(),
                     mutable: true,
                     value: int(1),
+                    pos: NO_POS
                 }],
                 expr: None
             })

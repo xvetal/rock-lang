@@ -172,7 +172,7 @@ mod tests {
             .iter()
             .map(|line| {
                 let program = Parser::new(tokenize(line).unwrap()).parse().unwrap();
-                let checked = check(&program, &env).map_err(|e| e.to_string())?;
+                let (checked, _) = check(&program, &env).map_err(|e| e.to_string())?;
                 let bytecode = compile(&program, &scope);
                 let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
                 env = checked;
