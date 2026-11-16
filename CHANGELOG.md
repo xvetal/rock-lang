@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- `mut` parameters: `fn f(mut n: int)` lets the function assign to `n`; the caller's value is not affected
+
 ## [0.8.0] - 2026-11-16
 
 ### Added

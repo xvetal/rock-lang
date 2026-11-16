@@ -122,7 +122,7 @@ fn function(decl: &FnDecl, functions: &[(String, Type)]) -> Result<(), CheckErro
         .map(|p| Local {
             name: p.name.clone(),
             ty: p.ty.clone(),
-            mutable: false,
+            mutable: p.mutable,
         })
         .collect();
     let mut checker = Checker::new(functions, params, decl.ret.clone());
@@ -515,6 +515,10 @@ mod tests {
         assert_eq!(
             error("fn f(n: int) { n = 1; }"),
             "1:16: cannot assign to immutable variable: n"
+        );
+        assert_eq!(
+            error("fn f(mut n: int) { let n = 1; n = 2; }"),
+            "1:31: cannot assign to immutable variable: n"
         );
         assert_eq!(
             error("let mut x = 1; { let x = 2; x = 3; }"),

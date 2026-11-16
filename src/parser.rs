@@ -127,10 +127,7 @@ impl Parser {
 
     fn let_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.advance();
-        let mutable = self.peek() == &Token::Mut;
-        if mutable {
-            self.advance();
-        }
+        let mutable = self.mutable();
         let name = self.ident("variable name after 'let'")?;
         self.expect(Token::Eq, "'='")?;
         let value = self.expr()?;
@@ -163,10 +160,11 @@ impl Parser {
     }
 
     fn param(&mut self) -> Result<Param, ParseError> {
+        let mutable = self.mutable();
         let name = self.ident("parameter name")?;
         self.expect(Token::Colon, "':'")?;
         let ty = self.ty()?;
-        Ok(Param { name, ty })
+        Ok(Param { name, mutable, ty })
     }
 
     fn ret_type(&mut self) -> Result<Type, ParseError> {
@@ -497,6 +495,15 @@ impl Parser {
             other => Err(ParseErrorKind::Expected { what, found: other }.at(pos)),
         }
     }
+
+    // Skips an optional `mut` and reports whether it was there.
+    fn mutable(&mut self) -> bool {
+        let mutable = self.peek() == &Token::Mut;
+        if mutable {
+            self.advance();
+        }
+        mutable
+    }
 }
 
 #[cfg(test)]
@@ -677,6 +684,7 @@ mod tests {
                 .iter()
                 .map(|(name, ty)| Param {
                     name: name.to_string(),
+                    mutable: false,
                     ty: ty.clone(),
                 })
                 .collect(),
@@ -1205,6 +1213,26 @@ mod tests {
     }
 
     #[test]
+    fn mut_parameter() {
+        let Stmt::Fn(mut expected) = fn_decl(
+            "f",
+            &[("n", Type::Int), ("m", Type::Int)],
+            Type::Unit,
+            block(vec![], None),
+        ) else {
+            unreachable!()
+        };
+        expected.params[0].mutable = true;
+        assert_eq!(
+            parse_program("fn f(mut n: int, m: int) {}"),
+            Ok(Program {
+                stmts: vec![Stmt::Fn(expected)],
+                expr: None
+            })
+        );
+    }
+
+    #[test]
     fn break_and_continue() {
         assert_eq!(
             parse("while x { if y { break; } continue }"),
@@ -1715,6 +1743,14 @@ mod tests {
         assert_eq!(
             parse_program("fn f(a: 1) {}"),
             Err(at(expected("type", Token::Int(1)), 1, 9))
+        );
+    }
+
+    #[test]
+    fn mut_parameter_needs_name() {
+        assert_eq!(
+            parse_program("fn f(mut: int) {}"),
+            Err(at(expected("parameter name", Token::Colon), 1, 9))
         );
     }
 

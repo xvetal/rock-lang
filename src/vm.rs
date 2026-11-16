@@ -376,6 +376,20 @@ mod tests {
     }
 
     #[test]
+    fn mut_parameters() {
+        assert_eq!(
+            vm(
+                "fn steps(mut n: int) -> int { let mut count = 0; while n > 1 { n = n / 2; count = count + 1; } count } steps(8)"
+            ),
+            Ok(Value::Int(3))
+        );
+        assert_eq!(
+            vm("fn inc(mut n: int) -> int { n = n + 1; n } let x = 5; inc(x) + x"),
+            Ok(Value::Int(11))
+        );
+    }
+
+    #[test]
     fn parameters_and_locals_are_separate_from_outer_variables() {
         assert_eq!(
             vm("let x = 1; fn f(x: int) -> int { x } f(2) + x"),

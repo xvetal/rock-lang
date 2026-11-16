@@ -1,7 +1,6 @@
 # TODO
 
 ## Checker
-- [ ] `mut` parameters: `fn f(mut n: int)`
 - [ ] Warnings, starting with unused `mut`
 
 ## Parser

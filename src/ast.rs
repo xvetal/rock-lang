@@ -122,6 +122,7 @@ impl fmt::Display for Type {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub name: String,
+    pub mutable: bool,
     pub ty: Type,
 }
 
