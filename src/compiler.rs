@@ -302,7 +302,7 @@ mod tests {
 
     fn code(input: &str) -> Vec<Op> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        check(&program, &Env::default()).unwrap();
+        assert_eq!(check(&program, &Env::default()).errors, []);
         compile(&program, &Scope::default()).main.chunk.code.clone()
     }
 

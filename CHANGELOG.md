@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Type errors no longer stop at the first one: `rock run`, `rock check` and the REPL report all type errors in the program, sorted by position, together with warnings. An undefined name or a wrong type is reported once, not again in every expression that uses it
+
 ## [0.9.0] - 2026-11-17
 
 ### Added

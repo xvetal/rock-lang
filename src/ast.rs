@@ -91,6 +91,9 @@ pub enum Type {
     Unit,
     // The type of `return`, `break` and `continue`; programs cannot write it.
     Never,
+    // The type of an expression that failed to check. It fits any type,
+    // so one mistake is reported once.
+    Error,
     Fn { params: Vec<Type>, ret: Box<Type> },
 }
 
@@ -101,6 +104,7 @@ impl fmt::Display for Type {
             Type::Bool => write!(f, "bool"),
             Type::Unit => write!(f, "()"),
             Type::Never => write!(f, "!"),
+            Type::Error => write!(f, "{{error}}"),
             Type::Fn { params, ret } => {
                 write!(f, "fn(")?;
                 for (i, param) in params.iter().enumerate() {

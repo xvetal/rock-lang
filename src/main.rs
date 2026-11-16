@@ -16,7 +16,7 @@ use std::process::ExitCode;
 use std::thread;
 
 use ast::Program;
-use checker::{Env, Warning};
+use checker::{CheckError, Checked, Env, Warning};
 use compiler::Scope;
 use value::Value;
 use vm::Vm;
@@ -82,34 +82,55 @@ fn read(path: &str) -> Result<String, String> {
     fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))
 }
 
-fn run_file(path: &str) -> Result<Value, String> {
+fn run_file(path: &str) -> Result<Value, Errors> {
     let program = check_file(path)?;
     let bytecode = compiler::compile(&program, &Scope::default());
-    Vm::new(io::stdout())
+    let value = Vm::new(io::stdout())
         .run(&bytecode)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(value)
 }
 
 // Reports parse and type errors and warnings without compiling or running the program.
-fn check_file(path: &str) -> Result<Program, String> {
+fn check_file(path: &str) -> Result<Program, Errors> {
     let source = read(path)?;
-    let (program, env, mut warnings) = check(&source, &Env::default())?;
-    warnings.extend(checker::finish(&env));
-    warn(warnings);
+    let (program, checked) = check(&source, &Env::default())?;
+    let mut warnings = checked.warnings;
+    warnings.extend(checker::finish(&checked.env));
+    diagnose(checked.errors, warnings)?;
     Ok(program)
 }
 
-fn report(result: Result<Value, String>) -> ExitCode {
+struct Errors(Vec<String>);
+
+impl From<String> for Errors {
+    fn from(message: String) -> Self {
+        Errors(vec![message])
+    }
+}
+
+fn report(result: Result<Value, Errors>) -> ExitCode {
     match result {
         Ok(Value::Unit) => ExitCode::SUCCESS,
         Ok(value) => {
             println!("{value}");
             ExitCode::SUCCESS
         }
-        Err(message) => {
-            eprintln!("error: {message}");
+        Err(Errors(messages)) => {
+            for message in messages {
+                eprintln!("error: {message}");
+            }
             ExitCode::FAILURE
         }
+    }
+}
+
+fn diagnose(errors: Vec<CheckError>, warnings: Vec<Warning>) -> Result<(), Errors> {
+    warn(warnings);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(Errors(errors.iter().map(|e| e.to_string()).collect()))
     }
 }
 
@@ -125,21 +146,21 @@ fn run(
     env: &mut Env,
     scope: &mut Scope,
     source: &str,
-) -> Result<Value, String> {
-    let (program, checked, warnings) = check(source, env)?;
-    warn(warnings);
+) -> Result<Value, Errors> {
+    let (program, checked) = check(source, env)?;
+    diagnose(checked.errors, checked.warnings)?;
     let bytecode = compiler::compile(&program, scope);
     let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
-    *env = checked;
+    *env = checked.env;
     *scope = bytecode.scope;
     Ok(value)
 }
 
-fn check(source: &str, env: &Env) -> Result<(Program, Env, Vec<Warning>), String> {
+fn check(source: &str, env: &Env) -> Result<(Program, Checked), String> {
     let tokens = lexer::tokenize(source)?;
     let program = parser::Parser::new(tokens)
         .parse()
         .map_err(|e| e.to_string())?;
-    let (checked, warnings) = checker::check(&program, env).map_err(|e| e.to_string())?;
-    Ok((program, checked, warnings))
+    let checked = checker::check(&program, env);
+    Ok((program, checked))
 }

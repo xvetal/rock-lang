@@ -145,7 +145,7 @@ mod tests {
 
     fn run(input: &str) -> (Result<Value, RuntimeError>, String) {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        check(&program, &Env::default()).unwrap();
+        assert_eq!(check(&program, &Env::default()).errors, []);
         let bytecode = compile(&program, &Scope::default());
         let mut out = Vec::new();
         let result = Vm::new(&mut out).run(&bytecode);
@@ -172,10 +172,13 @@ mod tests {
             .iter()
             .map(|line| {
                 let program = Parser::new(tokenize(line).unwrap()).parse().unwrap();
-                let (checked, _) = check(&program, &env).map_err(|e| e.to_string())?;
+                let checked = check(&program, &env);
+                if let Some(error) = checked.errors.first() {
+                    return Err(error.to_string());
+                }
                 let bytecode = compile(&program, &scope);
                 let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
-                env = checked;
+                env = checked.env;
                 scope = bytecode.scope;
                 Ok(value)
             })

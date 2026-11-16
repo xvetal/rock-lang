@@ -146,9 +146,14 @@ impl Local {
     }
 }
 
-// Checks the program and returns the updated environment and the warnings
-// for scopes that ended. Top-level variables stay in scope; see `finish`.
-pub fn check(program: &Program, env: &Env) -> Result<(Env, Vec<Warning>), CheckError> {
+#[derive(Debug)]
+pub struct Checked {
+    pub env: Env,
+    pub errors: Vec<CheckError>,
+    pub warnings: Vec<Warning>,
+}
+
+pub fn check(program: &Program, env: &Env) -> Checked {
     let decls: Vec<&FnDecl> = program
         .stmts
         .iter()
@@ -157,48 +162,41 @@ pub fn check(program: &Program, env: &Env) -> Result<(Env, Vec<Warning>), CheckE
             _ => None,
         })
         .collect();
-    for (i, decl) in decls.iter().enumerate() {
-        if decls[..i].iter().any(|other| other.name == decl.name) {
-            return Err(CheckErrorKind::DuplicateFunction(decl.name.clone()).at(decl.pos));
-        }
-    }
-
     let mut functions = env.functions.clone();
     functions.extend(decls.iter().map(|decl| (decl.name.clone(), decl.ty())));
-    let mut warnings = Vec::new();
-    for decl in &decls {
-        warnings.extend(function(decl, &functions)?);
-    }
 
     let mut checker = Checker::new(&functions, env.locals.clone(), Type::Unit);
-    checker.stmts(&program.stmts)?;
-    if let Some(expr) = &program.expr {
-        checker.expr(expr)?;
+    for (i, decl) in decls.iter().enumerate() {
+        if decls[..i].iter().any(|other| other.name == decl.name) {
+            checker.error(
+                CheckErrorKind::DuplicateFunction(decl.name.clone()),
+                decl.pos,
+            );
+        }
+        checker.function(decl);
     }
-    warnings.extend(checker.warnings);
-    let env = Env {
-        locals: checker.locals,
-        functions,
-    };
-    Ok((env, warnings))
+    checker.stmts(&program.stmts);
+    if let Some(expr) = &program.expr {
+        checker.expr(expr);
+    }
+
+    let Checker {
+        locals,
+        mut errors,
+        warnings,
+        ..
+    } = checker;
+    errors.sort_by_key(|e| e.pos);
+    Checked {
+        env: Env { locals, functions },
+        errors,
+        warnings,
+    }
 }
 
 // Warnings for top-level variables, once no more code can use them.
 pub fn finish(env: &Env) -> Vec<Warning> {
     env.locals.iter().flat_map(Local::warnings).collect()
-}
-
-fn function(decl: &FnDecl, functions: &[(String, Type)]) -> Result<Vec<Warning>, CheckError> {
-    let params = decl
-        .params
-        .iter()
-        .map(|p| Local::new(&p.name, p.ty.clone(), p.mutable, p.pos))
-        .collect();
-    let mut checker = Checker::new(functions, params, decl.ret.clone());
-    let body = checker.block(&decl.body)?;
-    expect(&decl.ret, &body, block_value_pos(&decl.body, decl.pos))?;
-    checker.end_scope(0);
-    Ok(checker.warnings)
 }
 
 fn value_pos(expr: &Expr) -> Pos {
@@ -212,24 +210,8 @@ fn block_value_pos(block: &Block, fallback: Pos) -> Pos {
     block.expr.as_deref().map_or(fallback, value_pos)
 }
 
-fn expect(expected: &Type, found: &Type, pos: Pos) -> Result<(), CheckError> {
-    if found == expected || *found == Type::Never {
-        Ok(())
-    } else {
-        Err(CheckErrorKind::Mismatch {
-            expected: expected.clone(),
-            found: found.clone(),
-        }
-        .at(pos))
-    }
-}
-
-fn join(first: Type, second: Type, pos: Pos) -> Result<Type, CheckError> {
-    if first == Type::Never {
-        return Ok(second);
-    }
-    expect(&first, &second, pos)?;
-    Ok(first)
+fn fits(found: &Type, expected: &Type) -> bool {
+    found == expected || matches!(found, Type::Never | Type::Error) || *expected == Type::Error
 }
 
 struct Checker<'a> {
@@ -237,6 +219,7 @@ struct Checker<'a> {
     locals: Vec<Local>,
     ret: Type,
     diverges: bool,
+    errors: Vec<CheckError>,
     warnings: Vec<Warning>,
 }
 
@@ -247,11 +230,49 @@ impl<'a> Checker<'a> {
             locals,
             ret,
             diverges: false,
+            errors: Vec::new(),
             warnings: Vec::new(),
         }
     }
 
-    fn stmts(&mut self, stmts: &[Stmt]) -> Result<(), CheckError> {
+    fn error(&mut self, kind: CheckErrorKind, pos: Pos) -> Type {
+        self.errors.push(kind.at(pos));
+        Type::Error
+    }
+
+    fn expect(&mut self, expected: &Type, found: &Type, pos: Pos) {
+        if !fits(found, expected) {
+            let kind = CheckErrorKind::Mismatch {
+                expected: expected.clone(),
+                found: found.clone(),
+            };
+            self.error(kind, pos);
+        }
+    }
+
+    fn join(&mut self, first: Type, second: Type, pos: Pos) -> Type {
+        if matches!(first, Type::Never | Type::Error) {
+            return second;
+        }
+        self.expect(&first, &second, pos);
+        first
+    }
+
+    fn function(&mut self, decl: &FnDecl) {
+        let params = decl
+            .params
+            .iter()
+            .map(|p| Local::new(&p.name, p.ty.clone(), p.mutable, p.pos))
+            .collect();
+        let mut body = Checker::new(self.functions, params, decl.ret.clone());
+        let ty = body.block(&decl.body);
+        body.expect(&decl.ret, &ty, block_value_pos(&decl.body, decl.pos));
+        body.end_scope(0);
+        self.errors.extend(body.errors);
+        self.warnings.extend(body.warnings);
+    }
+
+    fn stmts(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
             match stmt {
                 Stmt::Let {
@@ -260,42 +281,42 @@ impl<'a> Checker<'a> {
                     value,
                     pos,
                 } => {
-                    let ty = self.expr(value)?;
+                    let ty = self.expr(value);
                     self.locals.push(Local::new(name, ty, *mutable, *pos));
                 }
                 Stmt::Assign { name, value, pos } => {
-                    let found = self.expr(value)?;
-                    let local = self
-                        .local(name)
-                        .ok_or_else(|| CheckErrorKind::UndefinedVariable(name.clone()).at(*pos))?;
-                    if !local.mutable {
-                        return Err(CheckErrorKind::AssignToImmutable(name.clone()).at(*pos));
-                    }
+                    let found = self.expr(value);
+                    let Some(local) = self.local(name) else {
+                        self.error(CheckErrorKind::UndefinedVariable(name.clone()), *pos);
+                        continue;
+                    };
                     local.assigned = true;
-                    expect(&local.ty, &found, value_pos(value))?;
+                    let (mutable, ty) = (local.mutable, local.ty.clone());
+                    if !mutable {
+                        self.error(CheckErrorKind::AssignToImmutable(name.clone()), *pos);
+                    }
+                    self.expect(&ty, &found, value_pos(value));
                 }
                 Stmt::Expr(expr) => {
-                    self.expr(expr)?;
+                    self.expr(expr);
                 }
                 Stmt::Fn(_) => {}
             }
         }
-        Ok(())
     }
 
-    fn block(&mut self, block: &Block) -> Result<Type, CheckError> {
+    fn block(&mut self, block: &Block) -> Type {
         let outer = self.locals.len();
-        self.stmts(&block.stmts)?;
+        self.stmts(&block.stmts);
         let ty = match &block.expr {
-            Some(value) => self.expr(value)?,
+            Some(value) => self.expr(value),
             None if self.diverges => Type::Never,
             None => Type::Unit,
         };
         self.end_scope(outer);
-        Ok(ty)
+        ty
     }
 
-    // Drops the locals declared since `outer` and warns about the unused ones.
     fn end_scope(&mut self, outer: usize) {
         let ended = self.locals.split_off(outer);
         self.warnings.extend(ended.iter().flat_map(Local::warnings));
@@ -314,96 +335,82 @@ impl<'a> Checker<'a> {
         Some(ty.clone())
     }
 
-    fn expr(&mut self, expr: &Expr) -> Result<Type, CheckError> {
+    fn expr(&mut self, expr: &Expr) -> Type {
         let pos = expr.pos;
-        let ty = match &expr.kind {
+        match &expr.kind {
             ExprKind::Int(_) => Type::Int,
             ExprKind::Bool(_) => Type::Bool,
-            ExprKind::Var(name) => self
-                .lookup(name)
-                .ok_or_else(|| CheckErrorKind::UndefinedVariable(name.clone()).at(pos))?,
+            ExprKind::Var(name) => self.lookup(name).unwrap_or_else(|| {
+                self.error(CheckErrorKind::UndefinedVariable(name.clone()), pos)
+            }),
             ExprKind::Call { name, args } => {
                 let callee = match self.lookup(name) {
                     Some(ty) => ty,
                     None if name == "print" => return self.print(args, pos),
-                    None => return Err(CheckErrorKind::UndefinedFunction(name.clone()).at(pos)),
+                    None => self.error(CheckErrorKind::UndefinedFunction(name.clone()), pos),
                 };
-                let Type::Fn { params, ret } = callee else {
-                    return Err(CheckErrorKind::NotAFunction(callee).at(pos));
-                };
-                if args.len() != params.len() {
-                    return Err(CheckErrorKind::ArgumentCount {
-                        name: name.clone(),
-                        expected: params.len(),
-                        found: args.len(),
-                    }
-                    .at(pos));
-                }
-                for (arg, param) in args.iter().zip(&params) {
-                    let found = self.expr(arg)?;
-                    expect(param, &found, value_pos(arg))?;
-                }
-                *ret
+                self.call(name, callee, args, pos)
             }
             ExprKind::Unary { op, operand } => {
                 let ty = match op {
                     UnaryOp::Neg => Type::Int,
                     UnaryOp::Not => Type::Bool,
                 };
-                let found = self.expr(operand)?;
-                expect(&ty, &found, value_pos(operand))?;
+                let found = self.expr(operand);
+                self.expect(&ty, &found, value_pos(operand));
                 ty
             }
-            ExprKind::Binary { op, left, right } => self.binary(op, left, right, pos)?,
+            ExprKind::Binary { op, left, right } => self.binary(op, left, right, pos),
             ExprKind::Logical { left, right, .. } => {
-                let found = self.expr(left)?;
-                expect(&Type::Bool, &found, value_pos(left))?;
+                let found = self.expr(left);
+                self.expect(&Type::Bool, &found, value_pos(left));
                 let diverges = self.diverges;
-                let found = self.expr(right)?;
-                expect(&Type::Bool, &found, value_pos(right))?;
+                let found = self.expr(right);
+                self.expect(&Type::Bool, &found, value_pos(right));
                 self.diverges = diverges;
                 Type::Bool
             }
-            ExprKind::Block(block) => self.block(block)?,
+            ExprKind::Block(block) => self.block(block),
             ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
             } => {
-                let found = self.expr(cond)?;
-                expect(&Type::Bool, &found, value_pos(cond))?;
+                let found = self.expr(cond);
+                self.expect(&Type::Bool, &found, value_pos(cond));
                 let diverges = self.diverges;
-                let then_ty = self.block(then_branch)?;
+                let then_ty = self.block(then_branch);
                 match else_branch {
                     Some(else_branch) => {
                         let then_diverges = self.diverges;
                         self.diverges = diverges;
-                        let else_ty = self.expr(else_branch)?;
+                        let else_ty = self.expr(else_branch);
                         self.diverges = then_diverges && self.diverges;
-                        join(then_ty, else_ty, value_pos(else_branch))?
+                        self.join(then_ty, else_ty, value_pos(else_branch))
                     }
                     None => {
-                        expect(&Type::Unit, &then_ty, block_value_pos(then_branch, pos))?;
+                        self.expect(&Type::Unit, &then_ty, block_value_pos(then_branch, pos));
                         self.diverges = diverges;
                         Type::Unit
                     }
                 }
             }
             ExprKind::While { cond, body } => {
-                let found = self.expr(cond)?;
-                expect(&Type::Bool, &found, value_pos(cond))?;
+                let found = self.expr(cond);
+                self.expect(&Type::Bool, &found, value_pos(cond));
                 let diverges = self.diverges;
-                let body_ty = self.block(body)?;
-                expect(&Type::Unit, &body_ty, block_value_pos(body, pos))?;
+                let body_ty = self.block(body);
+                self.expect(&Type::Unit, &body_ty, block_value_pos(body, pos));
                 self.diverges = diverges;
                 Type::Unit
             }
             ExprKind::Return(value) => {
                 let (found, pos) = match value {
-                    Some(value) => (self.expr(value)?, value_pos(value)),
+                    Some(value) => (self.expr(value), value_pos(value)),
                     None => (Type::Unit, pos),
                 };
-                expect(&self.ret, &found, pos)?;
+                let ret = self.ret.clone();
+                self.expect(&ret, &found, pos);
                 self.diverges = true;
                 Type::Never
             }
@@ -411,41 +418,64 @@ impl<'a> Checker<'a> {
                 self.diverges = true;
                 Type::Never
             }
-        };
-        Ok(ty)
+        }
     }
 
-    fn binary(
-        &mut self,
-        op: &BinaryOp,
-        left: &Expr,
-        right: &Expr,
-        pos: Pos,
-    ) -> Result<Type, CheckError> {
-        let left_ty = self.expr(left)?;
-        if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
-            let right_ty = self.expr(right)?;
-            let ty = join(left_ty, right_ty, value_pos(right))?;
-            if matches!(ty, Type::Fn { .. }) {
-                return Err(CheckErrorKind::CannotCompare(ty).at(pos));
+    fn call(&mut self, name: &str, callee: Type, args: &[Expr], pos: Pos) -> Type {
+        let Type::Fn { params, ret } = callee else {
+            if callee != Type::Error {
+                self.error(CheckErrorKind::NotAFunction(callee), pos);
             }
-            return Ok(Type::Bool);
+            self.args(args);
+            return Type::Error;
+        };
+        if args.len() != params.len() {
+            let kind = CheckErrorKind::ArgumentCount {
+                name: name.to_string(),
+                expected: params.len(),
+                found: args.len(),
+            };
+            self.error(kind, pos);
+            self.args(args);
+            return *ret;
         }
-        expect(&Type::Int, &left_ty, value_pos(left))?;
-        let right_ty = self.expr(right)?;
-        expect(&Type::Int, &right_ty, value_pos(right))?;
-        Ok(match op {
+        for (arg, param) in args.iter().zip(&params) {
+            let found = self.expr(arg);
+            self.expect(param, &found, value_pos(arg));
+        }
+        *ret
+    }
+
+    fn args(&mut self, args: &[Expr]) {
+        for arg in args {
+            self.expr(arg);
+        }
+    }
+
+    fn binary(&mut self, op: &BinaryOp, left: &Expr, right: &Expr, pos: Pos) -> Type {
+        let left_ty = self.expr(left);
+        let right_ty = self.expr(right);
+        if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+            let ty = self.join(left_ty, right_ty, value_pos(right));
+            if matches!(ty, Type::Fn { .. }) {
+                self.error(CheckErrorKind::CannotCompare(ty), pos);
+            }
+            return Type::Bool;
+        }
+        self.expect(&Type::Int, &left_ty, value_pos(left));
+        self.expect(&Type::Int, &right_ty, value_pos(right));
+        match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => Type::Int,
             _ => Type::Bool,
-        })
+        }
     }
 
-    fn print(&mut self, args: &[Expr], pos: Pos) -> Result<Type, CheckError> {
-        let [value] = args else {
-            return Err(CheckErrorKind::PrintArgumentCount(args.len()).at(pos));
-        };
-        self.expr(value)?;
-        Ok(Type::Unit)
+    fn print(&mut self, args: &[Expr], pos: Pos) -> Type {
+        if args.len() != 1 {
+            self.error(CheckErrorKind::PrintArgumentCount(args.len()), pos);
+        }
+        self.args(args);
+        Type::Unit
     }
 }
 
@@ -459,19 +489,28 @@ mod tests {
         Parser::new(tokenize(input).unwrap()).parse().unwrap()
     }
 
-    fn check_program(input: &str) -> Result<Vec<Warning>, CheckError> {
-        let (env, mut warnings) = check(&parse(input), &Env::default())?;
-        warnings.extend(finish(&env));
-        Ok(warnings)
+    fn check_program(input: &str) -> Checked {
+        let mut checked = check(&parse(input), &Env::default());
+        checked.warnings.extend(finish(&checked.env));
+        checked
     }
 
     fn warnings(input: &str) -> Vec<String> {
-        let warnings = check_program(input).unwrap();
-        warnings.iter().map(|w| w.to_string()).collect()
+        let checked = check_program(input);
+        assert_eq!(checked.errors, [], "{input}");
+        checked.warnings.iter().map(|w| w.to_string()).collect()
+    }
+
+    fn errors(input: &str) -> Vec<String> {
+        let checked = check_program(input);
+        checked.errors.iter().map(|e| e.to_string()).collect()
     }
 
     fn error(input: &str) -> String {
-        check_program(input).unwrap_err().to_string()
+        let [error] = errors(input).try_into().unwrap_or_else(|errors| {
+            panic!("expected one error in {input}, got {errors:?}");
+        });
+        error
     }
 
     #[test]
@@ -493,7 +532,7 @@ mod tests {
             "let mut x = 1; { let x = true; } x = 2;",
             "fn f(n: int) -> int { let mut n = n; n = n + 1; n }",
         ] {
-            assert!(check_program(input).is_ok(), "{input}");
+            assert_eq!(check_program(input).errors, [], "{input}");
         }
     }
 
@@ -567,11 +606,12 @@ mod tests {
 
     #[test]
     fn top_level_warnings_wait_for_finish() {
-        let (env, warnings) = check(&parse("let mut x = 1; x"), &Env::default()).unwrap();
-        assert_eq!(warnings, []);
-        assert_eq!(finish(&env).len(), 1);
-        let (env, _) = check(&parse("x = 2;"), &env).unwrap();
-        assert_eq!(finish(&env), []);
+        let checked = check(&parse("let mut x = 1; x"), &Env::default());
+        assert_eq!(checked.warnings, []);
+        assert_eq!(finish(&checked.env).len(), 1);
+        let checked = check(&parse("x = 2;"), &checked.env);
+        assert_eq!(checked.errors, []);
+        assert_eq!(finish(&checked.env), []);
     }
 
     #[test]
@@ -585,7 +625,7 @@ mod tests {
             "while true { 1 + break; }",
             "while true { let x = if true { continue } else { 1 }; }",
         ] {
-            assert!(check_program(input).is_ok(), "{input}");
+            assert_eq!(check_program(input).errors, [], "{input}");
         }
     }
 
@@ -631,7 +671,7 @@ mod tests {
         assert_eq!(error("1 +\n  true"), "2:3: expected int, found bool");
         assert_eq!(error("-false"), "1:2: expected int, found bool");
         assert_eq!(error("!1"), "1:2: expected bool, found int");
-        assert_eq!(error("false < true"), "1:1: expected int, found bool");
+        assert_eq!(error("false < 1"), "1:1: expected int, found bool");
         assert_eq!(error("true && 1"), "1:9: expected bool, found int");
         assert_eq!(error("1 || true"), "1:1: expected bool, found int");
         assert_eq!(error("print(1) + 1"), "1:1: expected int, found ()");
@@ -653,7 +693,7 @@ mod tests {
 
     #[test]
     fn condition_and_branch_types() {
-        assert_eq!(error("if 1 { 2 }"), "1:4: expected bool, found int");
+        assert_eq!(error("if 1 {}"), "1:4: expected bool, found int");
         assert_eq!(error("while 1 {}"), "1:7: expected bool, found int");
         assert_eq!(error("if true { 1 }"), "1:11: expected (), found int");
         assert_eq!(
@@ -736,5 +776,63 @@ mod tests {
             ),
             "1:83: expected fn(int) -> int, found fn(int, int) -> int"
         );
+    }
+
+    #[test]
+    fn several_errors() {
+        assert_eq!(
+            errors("false < true"),
+            [
+                "1:1: expected int, found bool",
+                "1:9: expected int, found bool"
+            ]
+        );
+        assert_eq!(
+            errors("let a = b;\nfn f() -> int { true }\na = 1;"),
+            [
+                "1:9: undefined variable: b",
+                "2:17: expected int, found bool",
+                "3:1: cannot assign to immutable variable: a"
+            ]
+        );
+        assert_eq!(
+            errors("fn f(a: int) -> int { a } f(1, y)"),
+            [
+                "1:27: f expects 1 argument, got 2",
+                "1:32: undefined variable: y"
+            ]
+        );
+        assert_eq!(
+            errors("print(y, 1)"),
+            [
+                "1:1: print expects 1 argument, got 2",
+                "1:7: undefined variable: y"
+            ]
+        );
+    }
+
+    #[test]
+    fn errors_do_not_cascade() {
+        for (input, expected) in [
+            ("let x = y; x + 1", "1:9: undefined variable: y"),
+            ("let x = y; x()", "1:9: undefined variable: y"),
+            ("f(1) + 1", "1:1: undefined function: f"),
+            ("let f = g; f(1, 2) == true", "1:9: undefined variable: g"),
+            ("let mut x = y; x = true;", "1:13: undefined variable: y"),
+            (
+                "if true { y } else { 1 } + 1",
+                "1:11: undefined variable: y",
+            ),
+        ] {
+            assert_eq!(error(input), expected);
+        }
+    }
+
+    #[test]
+    fn warnings_come_with_errors() {
+        let checked = check_program("let x = 1; y");
+        let warnings: Vec<String> = checked.warnings.iter().map(|w| w.to_string()).collect();
+        assert_eq!(warnings, ["1:5: unused variable: x"]);
+        assert_eq!(checked.errors.len(), 1);
     }
 }
