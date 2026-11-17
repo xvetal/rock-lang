@@ -133,7 +133,6 @@ impl Local {
         }
     }
 
-    // Names starting with `_` are allowed to stay unused.
     fn warnings(&self) -> Vec<Warning> {
         let mut warnings = Vec::new();
         if !self.used && !self.name.starts_with('_') {

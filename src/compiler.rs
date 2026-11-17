@@ -259,8 +259,8 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    // The checker makes both operands bools, so every operand can go
-    // through JumpIfFalse.
+    // The checker ensures both operands are bools, so every operand can go
+    // through `JumpIfFalse`.
     fn logical(&mut self, op: &LogicalOp, left: &Expr, right: &Expr, pos: Pos) {
         let mut to_false = Vec::new();
         let mut to_true = Vec::new();

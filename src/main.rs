@@ -91,7 +91,7 @@ fn run_file(path: &str) -> Result<Value, Errors> {
     Ok(value)
 }
 
-// Reports parse and type errors and warnings without compiling or running the program.
+// The whole file is known, so top-level variables get their warnings too.
 fn check_file(path: &str) -> Result<Program, Errors> {
     let source = read(path)?;
     let (program, checked) = check(&source, &Env::default())?;
