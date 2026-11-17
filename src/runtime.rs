@@ -61,7 +61,10 @@ pub fn binary(op: &BinaryOp, l: Value, r: Value) -> Result<Value, RuntimeErrorKi
         BinaryOp::Le => Ok(Value::Bool(l.as_int() <= r.as_int())),
         BinaryOp::Gt => Ok(Value::Bool(l.as_int() > r.as_int())),
         BinaryOp::Ge => Ok(Value::Bool(l.as_int() >= r.as_int())),
-        BinaryOp::Add => checked(l.as_int().checked_add(r.as_int())),
+        BinaryOp::Add => match (l, r) {
+            (Value::Str(l), Value::Str(r)) => Ok(Value::Str(format!("{l}{r}").into())),
+            (l, r) => checked(l.as_int().checked_add(r.as_int())),
+        },
         BinaryOp::Sub => checked(l.as_int().checked_sub(r.as_int())),
         BinaryOp::Mul => checked(l.as_int().checked_mul(r.as_int())),
         BinaryOp::Div => {

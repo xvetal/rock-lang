@@ -1,0 +1,13 @@
+fn greet(name: str) -> str {
+    "Hello, " + name + "!"
+}
+
+let mut line = "";
+let mut i = 0;
+while i < 5 {
+    line = line + "*";
+    i = i + 1;
+}
+print(greet("Rock"));
+print(line);
+line == "*****"

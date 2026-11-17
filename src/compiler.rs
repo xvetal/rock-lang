@@ -141,6 +141,9 @@ impl<'a> Compiler<'a> {
             ExprKind::Bool(b) => {
                 self.chunk.emit(Op::Bool(*b), pos);
             }
+            ExprKind::Str(s) => {
+                self.chunk.emit(Op::Str(Rc::from(s.as_str())), pos);
+            }
             ExprKind::Var(name) => {
                 let op = self.lookup(name).expect(RESOLVED);
                 self.chunk.emit(op, pos);
@@ -546,6 +549,14 @@ mod tests {
     #[test]
     fn print_compiles_to_instruction() {
         assert_eq!(code("print(1)"), [Op::Int(1), Op::Print]);
+    }
+
+    #[test]
+    fn string_is_a_constant() {
+        assert_eq!(
+            code(r#""a" + "b""#),
+            [Op::Str("a".into()), Op::Str("b".into()), Op::Binary(Add)]
+        );
     }
 
     #[test]

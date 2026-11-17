@@ -38,6 +38,7 @@ pub struct Expr {
 pub enum ExprKind {
     Int(i64),
     Bool(bool),
+    Str(String),
     Var(String),
     Call {
         name: String,
@@ -88,6 +89,7 @@ pub struct Block {
 pub enum Type {
     Int,
     Bool,
+    Str,
     Unit,
     // The type of `return`, `break` and `continue`; programs cannot write it.
     Never,
@@ -102,6 +104,7 @@ impl fmt::Display for Type {
         match self {
             Type::Int => write!(f, "int"),
             Type::Bool => write!(f, "bool"),
+            Type::Str => write!(f, "str"),
             Type::Unit => write!(f, "()"),
             Type::Never => write!(f, "!"),
             Type::Error => write!(f, "{{error}}"),

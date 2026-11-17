@@ -3,6 +3,7 @@ use std::{fmt, iter::Peekable, str::Chars};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Int(u64),
+    Str(String),
     Ident(String),
     Let,
     Mut,
@@ -44,6 +45,7 @@ impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Token::Int(n) => write!(f, "{n}"),
+            Token::Str(s) => write!(f, "{s:?}"),
             Token::Ident(name) => write!(f, "{name}"),
             Token::Let => write!(f, "let"),
             Token::Mut => write!(f, "mut"),
@@ -145,6 +147,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
             ')' => Token::RParen,
             '{' => Token::LBrace,
             '}' => Token::RBrace,
+            '"' => Token::Str(string(&mut chars, &mut pos, start)?),
             '0'..='9' => {
                 let mut value = u64::from(c.to_digit(10).expect("c is an ASCII digit"));
                 while let Some(&d) = chars.peek() {
@@ -195,6 +198,35 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
         pos: end,
     });
     Ok(tokens)
+}
+
+fn string(chars: &mut Peekable<Chars>, pos: &mut Pos, start: Pos) -> Result<String, String> {
+    let mut value = String::new();
+    loop {
+        let at = *pos;
+        let Some(c) = chars.next() else {
+            return Err(format!("{start}: unterminated string"));
+        };
+        pos.advance(c);
+        if c == '"' {
+            return Ok(value);
+        }
+        if c != '\\' {
+            value.push(c);
+            continue;
+        }
+        let Some(escaped) = chars.next() else {
+            return Err(format!("{start}: unterminated string"));
+        };
+        pos.advance(escaped);
+        value.push(match escaped {
+            'n' => '\n',
+            't' => '\t',
+            '\\' => '\\',
+            '"' => '"',
+            _ => return Err(format!("{at}: unknown escape: \\{escaped}")),
+        });
+    }
 }
 
 fn eat(chars: &mut Peekable<Chars>, pos: &mut Pos, expected: char) -> bool {
@@ -444,7 +476,8 @@ mod tests {
         let source = "let mut x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 \
                       == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; \
                       { } if x { } else { } while x { break ; continue } \
-                      fn f ( a : int ) -> int { return }";
+                      fn f ( a : int ) -> int { return } \
+                      \"a\\\"b\\\\c\\nd\\te\"";
         let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens
             .iter()
@@ -497,6 +530,40 @@ mod tests {
     }
 
     #[test]
+    fn strings() {
+        assert_eq!(
+            tokens(r#"print("hi", "")"#),
+            Ok(vec![
+                ident("print"),
+                Token::LParen,
+                Token::Str("hi".to_string()),
+                Token::Comma,
+                Token::Str(String::new()),
+                Token::RParen,
+                Token::Eof
+            ])
+        );
+    }
+
+    #[test]
+    fn string_escapes() {
+        assert_eq!(
+            tokens(r#""a\"b\\c\nd\te""#),
+            Ok(vec![Token::Str("a\"b\\c\nd\te".to_string()), Token::Eof])
+        );
+    }
+
+    #[test]
+    fn positions_after_multiline_string() {
+        let positions: Vec<String> = tokenize("\"a\nb\" x")
+            .unwrap()
+            .iter()
+            .map(|t| t.pos.to_string())
+            .collect();
+        assert_eq!(positions, ["1:1", "2:4", "2:5"]);
+    }
+
+    #[test]
     fn integer_overflow() {
         assert_eq!(
             tokens("18446744073709551616"),
@@ -525,6 +592,26 @@ mod tests {
         assert_eq!(
             tokens("a | b"),
             Err("1:3: unexpected character: '|'".to_string())
+        );
+    }
+
+    #[test]
+    fn unterminated_string() {
+        assert_eq!(
+            tokens("let s = \"abc;"),
+            Err("1:9: unterminated string".to_string())
+        );
+        assert_eq!(
+            tokens("\"abc\\"),
+            Err("1:1: unterminated string".to_string())
+        );
+    }
+
+    #[test]
+    fn unknown_escape() {
+        assert_eq!(
+            tokens(r#""a\qb""#),
+            Err(r"1:3: unknown escape: \q".to_string())
         );
     }
 }

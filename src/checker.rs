@@ -339,6 +339,7 @@ impl<'a> Checker<'a> {
         match &expr.kind {
             ExprKind::Int(_) => Type::Int,
             ExprKind::Bool(_) => Type::Bool,
+            ExprKind::Str(_) => Type::Str,
             ExprKind::Var(name) => self.lookup(name).unwrap_or_else(|| {
                 self.error(CheckErrorKind::UndefinedVariable(name.clone()), pos)
             }),
@@ -461,6 +462,11 @@ impl<'a> Checker<'a> {
             }
             return Type::Bool;
         }
+        if *op == BinaryOp::Add && (left_ty == Type::Str || right_ty == Type::Str) {
+            self.expect(&Type::Str, &left_ty, value_pos(left));
+            self.expect(&Type::Str, &right_ty, value_pos(right));
+            return Type::Str;
+        }
         self.expect(&Type::Int, &left_ty, value_pos(left));
         self.expect(&Type::Int, &right_ty, value_pos(right));
         match op {
@@ -530,6 +536,8 @@ mod tests {
              fn odd(n: int) -> bool { if n == 0 { false } else { even(n - 1) } }",
             "let mut x = 1; { let x = true; } x = 2;",
             "fn f(n: int) -> int { let mut n = n; n = n + 1; n }",
+            r#"fn greet(name: str) -> str { "hi, " + name } greet("Rock") == "hi, Rock""#,
+            r#"let mut s = ""; s = s + "a"; print(s); s != "b""#,
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
         }
@@ -833,5 +841,20 @@ mod tests {
         let warnings: Vec<String> = checked.warnings.iter().map(|w| w.to_string()).collect();
         assert_eq!(warnings, ["1:5: unused variable: x"]);
         assert_eq!(checked.errors.len(), 1);
+    }
+
+    #[test]
+    fn string_operand_types() {
+        assert_eq!(error(r#""a" + 1"#), "1:7: expected str, found int");
+        assert_eq!(error(r#"1 + "a""#), "1:1: expected str, found int");
+        assert_eq!(error(r#""a" == 1"#), "1:8: expected str, found int");
+        assert_eq!(error(r#"-"a""#), "1:2: expected int, found str");
+        assert_eq!(
+            errors(r#""a" < "b""#),
+            [
+                "1:1: expected int, found str",
+                "1:7: expected int, found str"
+            ]
+        );
     }
 }

@@ -60,6 +60,7 @@ impl<W: Write> Vm<W> {
             match op {
                 Op::Int(n) => self.stack.push(Value::Int(n)),
                 Op::Bool(b) => self.stack.push(Value::Bool(b)),
+                Op::Str(s) => self.stack.push(Value::Str(s)),
                 Op::Unit => self.stack.push(Value::Unit),
                 Op::Pop => {
                     self.pop();
@@ -511,6 +512,25 @@ mod tests {
         assert_eq!(
             output("fn hello(x: int) { print(x); } hello(1); hello(2);"),
             "1\n2\n"
+        );
+    }
+
+    #[test]
+    fn strings() {
+        assert_eq!(vm(r#""Ro" + "ck""#), Ok(Value::Str("Rock".into())));
+        assert_eq!(vm(r#""a" == "a""#), Ok(Value::Bool(true)));
+        assert_eq!(vm(r#""a" + "b" != "ab""#), Ok(Value::Bool(false)));
+        assert_eq!(
+            output(
+                r#"fn greet(name: str) -> str { "Hello, " + name + "!" }
+                   let mut s = "";
+                   let mut i = 0;
+                   while i < 3 { s = s + "*"; i = i + 1; }
+                   print(greet("Rock"));
+                   print(s);
+                   print("a\tb\n");"#
+            ),
+            "Hello, Rock!\n***\na\tb\n\n"
         );
     }
 

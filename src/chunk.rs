@@ -8,6 +8,7 @@ use crate::lexer::Pos;
 pub enum Op {
     Int(i64),
     Bool(bool),
+    Str(Rc<str>),
     Unit,
     Pop,
     DefineLocal,

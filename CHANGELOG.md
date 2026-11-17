@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Strings: literals such as `"hello"` with the escapes `\n`, `\t`, `\\` and `\"`, the type `str`, concatenation with `+`, and comparison with `==` and `!=`. `print` writes a string without quotes
+
 ## [0.10.0] - 2026-11-17
 
 ### Changed

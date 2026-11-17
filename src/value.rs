@@ -7,6 +7,7 @@ use crate::chunk::Function;
 pub enum Value {
     Int(i64),
     Bool(bool),
+    Str(Rc<str>),
     Unit,
     Function(Rc<Function>),
 }
@@ -16,6 +17,7 @@ impl fmt::Display for Value {
         match self {
             Value::Int(n) => write!(f, "{n}"),
             Value::Bool(b) => write!(f, "{b}"),
+            Value::Str(s) => write!(f, "{s}"),
             Value::Unit => write!(f, "()"),
             Value::Function(function) => write!(f, "<fn {}>", function.name),
         }

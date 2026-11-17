@@ -266,6 +266,7 @@ impl Parser {
             Token::Ident(name) => match name.as_str() {
                 "int" => Ok(Type::Int),
                 "bool" => Ok(Type::Bool),
+                "str" => Ok(Type::Str),
                 _ => Err(ParseErrorKind::UnknownType(name).at(pos)),
             },
             Token::LParen => {
@@ -439,6 +440,7 @@ impl Parser {
                     i64::try_from(n).map_err(|_| ParseErrorKind::IntegerTooLarge.at(pos))?;
                 Ok(ExprKind::Int(value).at(pos))
             }
+            Token::Str(s) => Ok(ExprKind::Str(s).at(pos)),
             Token::True => Ok(ExprKind::Bool(true).at(pos)),
             Token::False => Ok(ExprKind::Bool(false).at(pos)),
             Token::Ident(name) => {
@@ -645,6 +647,7 @@ mod tests {
         match &mut expr.kind {
             ExprKind::Int(_)
             | ExprKind::Bool(_)
+            | ExprKind::Str(_)
             | ExprKind::Var(_)
             | ExprKind::Return(None)
             | ExprKind::Break
@@ -949,6 +952,14 @@ mod tests {
     fn bool_literals() {
         assert_eq!(parse("true"), Ok(boolean(true)));
         assert_eq!(parse("false"), Ok(boolean(false)));
+    }
+
+    #[test]
+    fn string_literal() {
+        assert_eq!(
+            parse(r#"f("hi")"#),
+            Ok(call("f", vec![ExprKind::Str("hi".to_string()).at(NO_POS)]))
+        );
     }
 
     #[test]
@@ -1292,6 +1303,7 @@ mod tests {
     fn types() {
         assert_eq!(parse_type("int"), Ok(Type::Int));
         assert_eq!(parse_type("bool"), Ok(Type::Bool));
+        assert_eq!(parse_type("str"), Ok(Type::Str));
         assert_eq!(parse_type("()"), Ok(Type::Unit));
         assert_eq!(
             parse_type("fn(int, bool) -> int"),
@@ -1314,6 +1326,7 @@ mod tests {
         for source in [
             "int",
             "bool",
+            "str",
             "()",
             "fn()",
             "fn(int, fn(int) -> bool) -> fn() -> int",
