@@ -27,6 +27,7 @@ pub enum ParseErrorKind {
     ReturnOutsideFn,
     BreakOutsideLoop,
     ContinueOutsideLoop,
+    TooDeep,
 }
 
 impl ParseErrorKind {
@@ -56,9 +57,15 @@ impl fmt::Display for ParseErrorKind {
             ParseErrorKind::ReturnOutsideFn => write!(f, "'return' outside of a function"),
             ParseErrorKind::BreakOutsideLoop => write!(f, "'break' outside of a loop"),
             ParseErrorKind::ContinueOutsideLoop => write!(f, "'continue' outside of a loop"),
+            ParseErrorKind::TooDeep => {
+                write!(f, "nesting is too deep, the limit is {MAX_DEPTH}")
+            }
         }
     }
 }
+
+// The parser, checker and compiler handle nesting recursively, so it is limited.
+const MAX_DEPTH: usize = 256;
 
 pub struct Parser {
     tokens: Vec<Located>,
@@ -66,6 +73,7 @@ pub struct Parser {
     in_fn: bool,
     in_loop: bool,
     errors: Vec<ParseError>,
+    depth: usize,
 }
 
 impl Parser {
@@ -76,6 +84,7 @@ impl Parser {
             in_fn: false,
             in_loop: false,
             errors: Vec::new(),
+            depth: 0,
         }
     }
 
@@ -157,17 +166,13 @@ impl Parser {
     }
 
     // Records the error and skips the rest of the broken statement: up to and
-    // including `;`, or up to `}`, `let` or `fn`, unless they are nested in braces.
+    // including `;`, or up to `}`, `let` or `fn`, unless they are inside
+    // brackets opened while skipping.
     fn recover(&mut self, error: ParseError, start: usize) {
         // The failed rule may have consumed the token it complains about.
         // Step back to it: it may be the `;` or `}` to stop at.
         while self.peek_pos() > error.pos {
             self.pos -= 1;
-        }
-        // If the statement fails on its first token, skip that token,
-        // otherwise the same error would repeat forever.
-        if self.pos == start {
-            self.advance();
         }
         // An unclosed block fails at the end of input in every enclosing
         // block too. Report it once.
@@ -175,18 +180,23 @@ impl Parser {
             self.errors.push(error);
         }
         let mut depth = 0;
+        // If the statement fails on its first token, skip that token,
+        // otherwise the same error would repeat forever.
+        let mut skip = self.pos == start;
         loop {
             match self.peek() {
                 Token::Eof => return,
-                Token::Semicolon if depth == 0 => {
+                Token::LParen | Token::LBrace => depth += 1,
+                Token::RParen | Token::RBrace if depth > 0 => depth -= 1,
+                _ if skip || depth > 0 => {}
+                Token::Semicolon => {
                     self.advance();
                     return;
                 }
-                Token::RBrace | Token::Let | Token::Fn if depth == 0 => return,
-                Token::LBrace => depth += 1,
-                Token::RBrace => depth -= 1,
+                Token::RBrace | Token::Let | Token::Fn => return,
                 _ => {}
             }
+            skip = false;
             self.advance();
         }
     }
@@ -262,18 +272,20 @@ impl Parser {
                 self.expect(Token::RParen, "')'")?;
                 Ok(Type::Unit)
             }
-            Token::Fn => {
-                self.expect(Token::LParen, "'('")?;
-                let params = self.list(Self::ty)?;
-                let ret = Box::new(self.ret_type()?);
-                Ok(Type::Fn { params, ret })
-            }
+            Token::Fn => self.nested(Self::fn_type),
             other => Err(ParseErrorKind::Expected {
                 what: "type",
                 found: other,
             }
             .at(pos)),
         }
+    }
+
+    fn fn_type(&mut self) -> Result<Type, ParseError> {
+        self.expect(Token::LParen, "'('")?;
+        let params = self.list(Self::ty)?;
+        let ret = Box::new(self.ret_type()?);
+        Ok(Type::Fn { params, ret })
     }
 
     fn assign_stmt(&mut self, name: String) -> Result<Stmt, ParseError> {
@@ -385,7 +397,12 @@ impl Parser {
         Ok(left)
     }
 
+    // All recursion in expressions passes through here, so one counter limits it.
     fn unary(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::prefixed)
+    }
+
+    fn prefixed(&mut self) -> Result<Expr, ParseError> {
         let pos = self.peek_pos();
         if self.peek() == &Token::Bang {
             self.advance();
@@ -533,6 +550,19 @@ impl Parser {
         }
     }
 
+    fn nested<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        if self.depth == MAX_DEPTH {
+            return Err(ParseErrorKind::TooDeep.at(self.peek_pos()));
+        }
+        self.depth += 1;
+        let result = parse(self);
+        self.depth -= 1;
+        result
+    }
+
     fn peek(&self) -> &Token {
         &self.tokens[self.pos].token
     }
@@ -582,6 +612,8 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
     use crate::lexer::tokenize;
     use BinaryOp::{Add, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Sub};
@@ -807,6 +839,21 @@ mod tests {
 
     fn cont() -> Expr {
         ExprKind::Continue.at(NO_POS)
+    }
+
+    // Test threads have a 2 MB stack, too small for debug builds at the limit.
+    fn on_big_stack(test: fn()) {
+        thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(test)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    // Takes `n + 1` levels: the outer expression is one too.
+    fn parens(n: usize) -> String {
+        format!("{}1{}", "(".repeat(n), ")".repeat(n))
     }
 
     #[test]
@@ -1505,6 +1552,10 @@ mod tests {
             "'continue' outside of a loop"
         );
         assert_eq!(
+            ParseErrorKind::TooDeep.to_string(),
+            "nesting is too deep, the limit is 256"
+        );
+        assert_eq!(
             at(expected("expression", Token::Eof), 1, 4).to_string(),
             "1:4: expected expression, found end of input"
         );
@@ -1914,5 +1965,68 @@ mod tests {
             errors("fn f() { while true { if x { 1"),
             ["1:31: expected '}', found end of input"]
         );
+    }
+
+    #[test]
+    fn nesting_up_to_the_limit() {
+        on_big_stack(|| {
+            assert_eq!(parse(&parens(MAX_DEPTH - 1)), Ok(int(1)));
+            assert!(parse_program(&format!("{}1", "-".repeat(MAX_DEPTH - 1))).is_ok());
+            assert!(
+                parse_program(&format!(
+                    "{}{}",
+                    "{".repeat(MAX_DEPTH),
+                    "}".repeat(MAX_DEPTH)
+                ))
+                .is_ok()
+            );
+            let ty = format!("{}int{}", "fn(".repeat(MAX_DEPTH), ")".repeat(MAX_DEPTH));
+            assert!(parse_type(&ty).is_ok());
+        });
+    }
+
+    #[test]
+    fn nesting_too_deep() {
+        on_big_stack(|| {
+            assert_eq!(
+                parse(&parens(MAX_DEPTH)),
+                Err(at(ParseErrorKind::TooDeep, 1, 257))
+            );
+            assert_eq!(
+                parse_program(&format!(
+                    "{}{}",
+                    "{".repeat(MAX_DEPTH + 1),
+                    "}".repeat(MAX_DEPTH + 1)
+                )),
+                Err(at(ParseErrorKind::TooDeep, 1, 257))
+            );
+            let ty = format!(
+                "{}int{}",
+                "fn(".repeat(MAX_DEPTH + 1),
+                ")".repeat(MAX_DEPTH + 1)
+            );
+            assert_eq!(parse_type(&ty), Err(at(ParseErrorKind::TooDeep, 1, 771)));
+        });
+    }
+
+    #[test]
+    fn recovery_after_too_deep() {
+        on_big_stack(|| {
+            assert_eq!(
+                errors(&format!("{};\nlet x = ;\n(1)", parens(1000))),
+                [
+                    "1:257: nesting is too deep, the limit is 256",
+                    "2:9: expected expression, found ';'"
+                ]
+            );
+            let ty = format!("{}int{}", "fn(".repeat(1000), ")".repeat(1000));
+            assert_eq!(
+                errors(&format!("fn f(a: {ty}) {{}}\nlet x = ;")),
+                [
+                    "1:779: nesting is too deep, the limit is 256",
+                    "2:9: expected expression, found ';'"
+                ]
+            );
+        });
     }
 }

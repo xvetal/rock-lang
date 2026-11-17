@@ -21,8 +21,9 @@ use compiler::Scope;
 use value::Value;
 use vm::Vm;
 
-// The parser and the compiler are recursive, so deeply nested input
-// needs a bigger stack than the default 8 MB main thread.
+// Nesting is limited by the parser, but a long chain like `1 + 1 + ...` still
+// builds a deep tree, and the checker and the compiler walk it recursively.
+// That needs a bigger stack than the default 8 MB main thread.
 const STACK_SIZE: usize = 256 * 1024 * 1024;
 
 fn main() -> ExitCode {
