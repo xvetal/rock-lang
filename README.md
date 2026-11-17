@@ -4,7 +4,7 @@ A toy programming language written in Rust, built for learning.
 
 ## Status
 
-Version 0.9.0: programs are statically typed and type-checked before they run, then executed on a bytecode virtual machine; unused variables and unneeded `mut` are reported as warnings.
+Version 0.10.0: programs are statically typed and type-checked before they run, then executed on a bytecode virtual machine; all syntax and type errors are reported at once, together with warnings for unused variables and unneeded `mut`.
 
 - Integer and boolean literals, `+ - * /`, unary minus, parentheses
 - Comparisons `== != < <= > >=` and logical `! && ||` with short-circuit
@@ -15,7 +15,7 @@ Version 0.9.0: programs are statically typed and type-checked before they run, t
 - Functions with `fn` and `return`, including recursion; parameters and return values have types, e.g. `fn add(a: int, b: int) -> int`; parameters can be `mut`; functions are values, can be called before their declaration, and see only their parameters and locals
 - The built-in `print`
 - Static types `int`, `bool`, `()` and function types such as `fn(int) -> int`
-- Errors with line and column: parse errors, type errors (mismatched types, undefined names, wrong argument counts, assignment to immutable variables), and runtime errors (division by zero, integer overflow, stack overflow)
+- Errors with line and column: parse errors (including nesting deeper than 256 levels) and type errors (mismatched types, undefined names, wrong argument counts, assignment to immutable variables), all reported at once, and runtime errors (division by zero, integer overflow, stack overflow)
 - Warnings with line and column: unused variables and parameters (names starting with `_` are exempt) and `mut` that is never needed
 - Interactive REPL, running programs from a file, and checking them without running with `rock check`
 
