@@ -5,6 +5,9 @@
 ### Added
 - Strings: literals such as `"hello"` with the escapes `\n`, `\t`, `\\` and `\"`, the type `str`, concatenation with `+`, and comparison with `==` and `!=`. `print` writes a string without quotes
 
+### Fixed
+- A long chain of operators such as `1 + 1 + … + 1` no longer overflows the stack
+
 ## [0.10.0] - 2026-11-17
 
 ### Changed

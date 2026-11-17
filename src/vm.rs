@@ -498,6 +498,14 @@ mod tests {
     }
 
     #[test]
+    fn long_chains_need_no_big_stack() {
+        let sum = format!("{}1", "1 + ".repeat(100_000));
+        assert_eq!(vm(&sum), Ok(Value::Int(100_001)));
+        let all = format!("{}true", "true && ".repeat(100_000));
+        assert_eq!(vm(&all), Ok(Value::Bool(true)));
+    }
+
+    #[test]
     fn print() {
         assert_eq!(output("let x = 1 + 2 * 3; print(x);"), "7\n");
         assert_eq!(output("print(false); print(print(1));"), "false\n1\n()\n");

@@ -44,19 +44,20 @@ pub enum ExprKind {
         name: String,
         args: Vec<Expr>,
     },
+    // `a - b + c` is one node with `rest` holding `- b` and `+ c`, evaluated
+    // left to right. Nesting each operator in the left operand instead would
+    // make the tree as deep as the chain is long.
     Binary {
-        op: BinaryOp,
         left: Box<Expr>,
-        right: Box<Expr>,
+        rest: Vec<(BinaryOp, Pos, Expr)>,
     },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
     },
     Logical {
-        op: LogicalOp,
         left: Box<Expr>,
-        right: Box<Expr>,
+        rest: Vec<(LogicalOp, Pos, Expr)>,
     },
     Block(Block),
     If {

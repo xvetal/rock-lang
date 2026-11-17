@@ -303,35 +303,25 @@ impl Parser {
     }
 
     fn or(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.and()?;
+        let left = self.and()?;
+        let mut rest = Vec::new();
         while self.peek() == &Token::OrOr {
             let pos = self.peek_pos();
             self.advance();
-            let right = self.and()?;
-            left = ExprKind::Logical {
-                op: LogicalOp::Or,
-                left: Box::new(left),
-                right: Box::new(right),
-            }
-            .at(pos);
+            rest.push((LogicalOp::Or, pos, self.and()?));
         }
-        Ok(left)
+        Ok(logical_node(left, rest))
     }
 
     fn and(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.comparison()?;
+        let left = self.comparison()?;
+        let mut rest = Vec::new();
         while self.peek() == &Token::AndAnd {
             let pos = self.peek_pos();
             self.advance();
-            let right = self.comparison()?;
-            left = ExprKind::Logical {
-                op: LogicalOp::And,
-                left: Box::new(left),
-                right: Box::new(right),
-            }
-            .at(pos);
+            rest.push((LogicalOp::And, pos, self.comparison()?));
         }
-        Ok(left)
+        Ok(logical_node(left, rest))
     }
 
     fn comparison(&mut self) -> Result<Expr, ParseError> {
@@ -347,17 +337,13 @@ impl Parser {
         };
         let pos = self.peek_pos();
         self.advance();
-        let right = self.additive()?;
-        Ok(ExprKind::Binary {
-            op,
-            left: Box::new(left),
-            right: Box::new(right),
-        }
-        .at(pos))
+        let rest = vec![(op, pos, self.additive()?)];
+        Ok(binary_node(left, rest))
     }
 
     fn additive(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.term()?;
+        let left = self.term()?;
+        let mut rest = Vec::new();
         loop {
             let op = match self.peek() {
                 Token::Plus => BinaryOp::Add,
@@ -366,19 +352,14 @@ impl Parser {
             };
             let pos = self.peek_pos();
             self.advance();
-            let right = self.term()?;
-            left = ExprKind::Binary {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
-            }
-            .at(pos);
+            rest.push((op, pos, self.term()?));
         }
-        Ok(left)
+        Ok(binary_node(left, rest))
     }
 
     fn term(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.unary()?;
+        let left = self.unary()?;
+        let mut rest = Vec::new();
         loop {
             let op = match self.peek() {
                 Token::Star => BinaryOp::Mul,
@@ -387,15 +368,9 @@ impl Parser {
             };
             let pos = self.peek_pos();
             self.advance();
-            let right = self.unary()?;
-            left = ExprKind::Binary {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
-            }
-            .at(pos);
+            rest.push((op, pos, self.unary()?));
         }
-        Ok(left)
+        Ok(binary_node(left, rest))
     }
 
     // All recursion in expressions passes through here, so one counter limits it.
@@ -612,6 +587,29 @@ impl Parser {
     }
 }
 
+// A chain is located at its last operator, which computes its value.
+fn binary_node(left: Expr, rest: Vec<(BinaryOp, Pos, Expr)>) -> Expr {
+    match rest.last() {
+        Some(&(_, pos, _)) => ExprKind::Binary {
+            left: Box::new(left),
+            rest,
+        }
+        .at(pos),
+        None => left,
+    }
+}
+
+fn logical_node(left: Expr, rest: Vec<(LogicalOp, Pos, Expr)>) -> Expr {
+    match rest.last() {
+        Some(&(_, pos, _)) => ExprKind::Logical {
+            left: Box::new(left),
+            rest,
+        }
+        .at(pos),
+        None => left,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -653,9 +651,19 @@ mod tests {
             | ExprKind::Break
             | ExprKind::Continue => {}
             ExprKind::Call { args, .. } => args.iter_mut().for_each(strip),
-            ExprKind::Binary { left, right, .. } | ExprKind::Logical { left, right, .. } => {
+            ExprKind::Binary { left, rest } => {
                 strip(left);
-                strip(right);
+                for (_, pos, right) in rest {
+                    *pos = NO_POS;
+                    strip(right);
+                }
+            }
+            ExprKind::Logical { left, rest } => {
+                strip(left);
+                for (_, pos, right) in rest {
+                    *pos = NO_POS;
+                    strip(right);
+                }
             }
             ExprKind::Unary { operand, .. } | ExprKind::Return(Some(operand)) => strip(operand),
             ExprKind::Block(block) => strip_block(block),
@@ -743,10 +751,14 @@ mod tests {
     }
 
     fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
+        bin_chain(left, vec![(op, right)])
+    }
+
+    fn bin_chain(left: Expr, rest: Vec<(BinaryOp, Expr)>) -> Expr {
+        let rest = rest.into_iter().map(|(op, e)| (op, NO_POS, e)).collect();
         ExprKind::Binary {
-            op,
             left: Box::new(left),
-            right: Box::new(right),
+            rest,
         }
         .at(NO_POS)
     }
@@ -768,10 +780,14 @@ mod tests {
     }
 
     fn logical(op: LogicalOp, left: Expr, right: Expr) -> Expr {
+        logical_chain(left, vec![(op, right)])
+    }
+
+    fn logical_chain(left: Expr, rest: Vec<(LogicalOp, Expr)>) -> Expr {
+        let rest = rest.into_iter().map(|(op, e)| (op, NO_POS, e)).collect();
         ExprKind::Logical {
-            op,
             left: Box::new(left),
-            right: Box::new(right),
+            rest,
         }
         .at(NO_POS)
     }
@@ -886,10 +902,12 @@ mod tests {
     fn all_operators() {
         assert_eq!(
             parse("1 + 2 - 3 * 4 / 5"),
-            Ok(bin(
-                Sub,
-                bin(Add, int(1), int(2)),
-                bin(Div, bin(Mul, int(3), int(4)), int(5))
+            Ok(bin_chain(
+                int(1),
+                vec![
+                    (Add, int(2)),
+                    (Sub, bin_chain(int(3), vec![(Mul, int(4)), (Div, int(5))]))
+                ]
             ))
         );
     }
@@ -898,7 +916,7 @@ mod tests {
     fn subtraction_is_left_associative() {
         assert_eq!(
             parse("10 - 3 - 2"),
-            Ok(bin(Sub, bin(Sub, int(10), int(3)), int(2)))
+            Ok(bin_chain(int(10), vec![(Sub, int(3)), (Sub, int(2))]))
         );
     }
 
@@ -906,7 +924,7 @@ mod tests {
     fn division_is_left_associative() {
         assert_eq!(
             parse("8 / 4 / 2"),
-            Ok(bin(Div, bin(Div, int(8), int(4)), int(2)))
+            Ok(bin_chain(int(8), vec![(Div, int(4)), (Div, int(2))]))
         );
     }
 
@@ -1015,7 +1033,10 @@ mod tests {
     fn logical_operators_are_left_associative() {
         assert_eq!(
             parse("a || b || c"),
-            Ok(logical(Or, logical(Or, var("a"), var("b")), var("c")))
+            Ok(logical_chain(
+                var("a"),
+                vec![(Or, var("b")), (Or, var("c"))]
+            ))
         );
     }
 
@@ -1420,15 +1441,32 @@ mod tests {
     fn infix_expressions_are_located_at_their_operator() {
         let expr = parse_located("a * (b +\n  c)");
         assert_eq!(expr.pos, Pos { line: 1, col: 3 });
-        let ExprKind::Binary { left, right, .. } = expr.kind else {
+        let ExprKind::Binary { left, rest } = expr.kind else {
             panic!("expected a binary expression");
         };
         assert_eq!(left.pos, Pos { line: 1, col: 1 });
+        let [(_, _, right)] = &rest[..] else {
+            panic!("expected one operator");
+        };
         assert_eq!(right.pos, Pos { line: 1, col: 8 });
-        let ExprKind::Binary { right, .. } = right.kind else {
+        let ExprKind::Binary { rest, .. } = &right.kind else {
             panic!("expected a binary expression");
         };
-        assert_eq!(right.pos, Pos { line: 2, col: 3 });
+        assert_eq!(rest[0].2.pos, Pos { line: 2, col: 3 });
+    }
+
+    #[test]
+    fn chain_is_located_at_its_last_operator() {
+        let expr = parse_located("a - b\n  + c");
+        assert_eq!(expr.pos, Pos { line: 2, col: 3 });
+        let ExprKind::Binary { rest, .. } = expr.kind else {
+            panic!("expected a binary expression");
+        };
+        let positions: Vec<Pos> = rest.iter().map(|(_, pos, _)| *pos).collect();
+        assert_eq!(
+            positions,
+            [Pos { line: 1, col: 3 }, Pos { line: 2, col: 3 }]
+        );
     }
 
     #[test]

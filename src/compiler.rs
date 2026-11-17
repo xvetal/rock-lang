@@ -167,14 +167,21 @@ impl<'a> Compiler<'a> {
                 self.expr(operand);
                 self.chunk.emit(Op::Unary(op.clone()), pos);
             }
-            ExprKind::Binary { op, left, right } => {
+            ExprKind::Binary { left, rest } => {
                 self.expr(left);
-                self.temps += 1;
-                self.expr(right);
-                self.temps -= 1;
-                self.chunk.emit(Op::Binary(op.clone()), pos);
+                for (op, pos, right) in rest {
+                    self.temps += 1;
+                    self.expr(right);
+                    self.temps -= 1;
+                    self.chunk.emit(Op::Binary(op.clone()), *pos);
+                }
             }
-            ExprKind::Logical { op, left, right } => self.logical(op, left, right, pos),
+            ExprKind::Logical { left, rest } => {
+                self.expr(left);
+                for (op, pos, right) in rest {
+                    self.logical(op, right, *pos);
+                }
+            }
             ExprKind::Block(block) => self.block(block, pos),
             ExprKind::If {
                 cond,
@@ -262,13 +269,12 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    // The checker ensures both operands are bools, so every operand can go
-    // through `JumpIfFalse`.
-    fn logical(&mut self, op: &LogicalOp, left: &Expr, right: &Expr, pos: Pos) {
+    // The left operand is already on the stack. The checker ensures both
+    // operands are bools, so every operand can go through `JumpIfFalse`.
+    fn logical(&mut self, op: &LogicalOp, right: &Expr, pos: Pos) {
         let mut to_false = Vec::new();
         let mut to_true = Vec::new();
 
-        self.expr(left);
         let left_false = self.chunk.emit(Op::JumpIfFalse(0), pos);
         match op {
             LogicalOp::And => to_false.push(left_false),

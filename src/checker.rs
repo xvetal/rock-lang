@@ -360,13 +360,23 @@ impl<'a> Checker<'a> {
                 self.expect(&ty, &found, value_pos(operand));
                 ty
             }
-            ExprKind::Binary { op, left, right } => self.binary(op, left, right, pos),
-            ExprKind::Logical { left, right, .. } => {
+            ExprKind::Binary { left, rest } => {
+                let mut ty = self.expr(left);
+                let mut ty_pos = value_pos(left);
+                for (op, pos, right) in rest {
+                    ty = self.binary(op, ty, ty_pos, right, *pos);
+                    ty_pos = *pos;
+                }
+                ty
+            }
+            ExprKind::Logical { left, rest } => {
                 let found = self.expr(left);
                 self.expect(&Type::Bool, &found, value_pos(left));
                 let diverges = self.diverges;
-                let found = self.expr(right);
-                self.expect(&Type::Bool, &found, value_pos(right));
+                for (_, _, right) in rest {
+                    let found = self.expr(right);
+                    self.expect(&Type::Bool, &found, value_pos(right));
+                }
                 self.diverges = diverges;
                 Type::Bool
             }
@@ -452,8 +462,14 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn binary(&mut self, op: &BinaryOp, left: &Expr, right: &Expr, pos: Pos) -> Type {
-        let left_ty = self.expr(left);
+    fn binary(
+        &mut self,
+        op: &BinaryOp,
+        left_ty: Type,
+        left_pos: Pos,
+        right: &Expr,
+        pos: Pos,
+    ) -> Type {
         let right_ty = self.expr(right);
         if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
             let ty = self.join(left_ty, right_ty, value_pos(right));
@@ -463,11 +479,11 @@ impl<'a> Checker<'a> {
             return Type::Bool;
         }
         if *op == BinaryOp::Add && (left_ty == Type::Str || right_ty == Type::Str) {
-            self.expect(&Type::Str, &left_ty, value_pos(left));
+            self.expect(&Type::Str, &left_ty, left_pos);
             self.expect(&Type::Str, &right_ty, value_pos(right));
             return Type::Str;
         }
-        self.expect(&Type::Int, &left_ty, value_pos(left));
+        self.expect(&Type::Int, &left_ty, left_pos);
         self.expect(&Type::Int, &right_ty, value_pos(right));
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => Type::Int,

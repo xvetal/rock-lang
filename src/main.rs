@@ -21,10 +21,9 @@ use compiler::Scope;
 use value::Value;
 use vm::Vm;
 
-// Nesting is limited by the parser, but a long chain like `1 + 1 + ...` still
-// builds a deep tree, and the checker and the compiler walk it recursively.
-// That needs a bigger stack than the default 8 MB main thread.
-const STACK_SIZE: usize = 256 * 1024 * 1024;
+// The parser limits nesting, but at that limit a debug build needs about 5 MB
+// of stack, too close to the 8 MB main thread.
+const STACK_SIZE: usize = 64 * 1024 * 1024;
 
 fn main() -> ExitCode {
     thread::Builder::new()
