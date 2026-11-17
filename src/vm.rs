@@ -543,6 +543,15 @@ mod tests {
     }
 
     #[test]
+    fn strings_compare_by_character_codes() {
+        assert_eq!(vm(r#""apple" < "banana""#), Ok(Value::Bool(true)));
+        assert_eq!(vm(r#""Zebra" < "apple""#), Ok(Value::Bool(true)));
+        assert_eq!(vm(r#""ab" > "a""#), Ok(Value::Bool(true)));
+        assert_eq!(vm(r#""" < "a""#), Ok(Value::Bool(true)));
+        assert_eq!(vm(r#""a" <= "a" && "a" >= "a""#), Ok(Value::Bool(true)));
+    }
+
+    #[test]
     fn functions_shadow_print() {
         assert_eq!(output("fn print(x: int) -> int { x } print(1);"), "");
     }

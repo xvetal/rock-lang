@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fmt;
 use std::io;
 
@@ -57,10 +58,10 @@ pub fn binary(op: &BinaryOp, l: Value, r: Value) -> Result<Value, RuntimeErrorKi
     match op {
         BinaryOp::Eq => Ok(Value::Bool(l == r)),
         BinaryOp::Ne => Ok(Value::Bool(l != r)),
-        BinaryOp::Lt => Ok(Value::Bool(l.as_int() < r.as_int())),
-        BinaryOp::Le => Ok(Value::Bool(l.as_int() <= r.as_int())),
-        BinaryOp::Gt => Ok(Value::Bool(l.as_int() > r.as_int())),
-        BinaryOp::Ge => Ok(Value::Bool(l.as_int() >= r.as_int())),
+        BinaryOp::Lt => Ok(Value::Bool(order(&l, &r).is_lt())),
+        BinaryOp::Le => Ok(Value::Bool(order(&l, &r).is_le())),
+        BinaryOp::Gt => Ok(Value::Bool(order(&l, &r).is_gt())),
+        BinaryOp::Ge => Ok(Value::Bool(order(&l, &r).is_ge())),
         BinaryOp::Add => match (l, r) {
             (Value::Str(l), Value::Str(r)) => Ok(Value::Str(format!("{l}{r}").into())),
             (l, r) => checked(l.as_int().checked_add(r.as_int())),
@@ -81,6 +82,13 @@ fn checked(result: Option<i64>) -> Result<Value, RuntimeErrorKind> {
     result
         .map(Value::Int)
         .ok_or(RuntimeErrorKind::IntegerOverflow)
+}
+
+fn order(l: &Value, r: &Value) -> Ordering {
+    match (l, r) {
+        (Value::Str(l), Value::Str(r)) => l.cmp(r),
+        _ => l.as_int().cmp(&r.as_int()),
+    }
 }
 
 #[cfg(test)]
