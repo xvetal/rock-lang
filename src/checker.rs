@@ -213,6 +213,18 @@ fn fits(found: &Type, expected: &Type) -> bool {
     found == expected || matches!(found, Type::Never | Type::Error) || *expected == Type::Error
 }
 
+// Built-in functions with a fixed type. `print` takes a value of any type, so
+// it is checked separately.
+fn builtin(name: &str) -> Option<Type> {
+    match name {
+        "len" => Some(Type::Fn {
+            params: vec![Type::Str],
+            ret: Box::new(Type::Int),
+        }),
+        _ => None,
+    }
+}
+
 struct Checker<'a> {
     functions: &'a [(String, Type)],
     locals: Vec<Local>,
@@ -347,7 +359,9 @@ impl<'a> Checker<'a> {
                 let callee = match self.lookup(name) {
                     Some(ty) => ty,
                     None if name == "print" => return self.print(args, pos),
-                    None => self.error(CheckErrorKind::UndefinedFunction(name.clone()), pos),
+                    None => builtin(name).unwrap_or_else(|| {
+                        self.error(CheckErrorKind::UndefinedFunction(name.clone()), pos)
+                    }),
                 };
                 self.call(name, callee, args, pos)
             }
@@ -556,6 +570,8 @@ mod tests {
             r#"fn greet(name: str) -> str { "hi, " + name } greet("Rock") == "hi, Rock""#,
             r#"let mut s = ""; s = s + "a"; print(s); s != "b""#,
             r#""a" < "b" && "b" >= "a""#,
+            r#"len("abc") + 1"#,
+            "fn len(n: int) -> int { n } len(1)",
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
         }
@@ -875,5 +891,15 @@ mod tests {
                 "1:7: expected int, found str"
             ]
         );
+    }
+
+    #[test]
+    fn len_errors() {
+        assert_eq!(error("len(1)"), "1:5: expected str, found int");
+        assert_eq!(
+            error(r#"len("a", "b")"#),
+            "1:1: len expects 1 argument, got 2"
+        );
+        assert_eq!(error("let f = len;"), "1:9: undefined variable: len");
     }
 }

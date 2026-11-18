@@ -23,6 +23,7 @@ pub enum Op {
     Call(usize),
     Return,
     Print,
+    Len,
 }
 
 #[derive(Debug, Default, PartialEq)]

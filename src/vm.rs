@@ -124,6 +124,12 @@ impl<W: Write> Vm<W> {
                         .map_err(|e| at(RuntimeErrorKind::Output(e.kind())))?;
                     self.stack.push(Value::Unit);
                 }
+                Op::Len => {
+                    let Value::Str(s) = self.pop() else {
+                        panic!("the checker only passes a str to len");
+                    };
+                    self.stack.push(Value::Int(s.len() as i64));
+                }
             }
         }
         Ok(self.stack.pop().unwrap_or(Value::Unit))
@@ -549,6 +555,14 @@ mod tests {
         assert_eq!(vm(r#""ab" > "a""#), Ok(Value::Bool(true)));
         assert_eq!(vm(r#""" < "a""#), Ok(Value::Bool(true)));
         assert_eq!(vm(r#""a" <= "a" && "a" >= "a""#), Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn len_counts_bytes() {
+        assert_eq!(vm(r#"len("")"#), Ok(Value::Int(0)));
+        assert_eq!(vm(r#"len("Rock")"#), Ok(Value::Int(4)));
+        assert_eq!(vm(r#"len("a\n")"#), Ok(Value::Int(2)));
+        assert_eq!(vm(r#"len("привет")"#), Ok(Value::Int(12)));
     }
 
     #[test]

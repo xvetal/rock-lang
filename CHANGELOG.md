@@ -4,6 +4,7 @@
 
 ### Added
 - Strings: literals such as `"hello"` with the escapes `\n`, `\t`, `\\` and `\"`, the type `str`, concatenation with `+`, and comparison with `==`, `!=`, `<`, `<=`, `>` and `>=`, where order follows character codes. `print` writes a string without quotes
+- `len` returns the length of a string in bytes, so `len("привет")` is `12`
 
 ### Fixed
 - A long chain of operators such as `1 + 1 + … + 1` no longer overflows the stack

@@ -149,10 +149,9 @@ impl<'a> Compiler<'a> {
                 self.chunk.emit(op, pos);
             }
             ExprKind::Call { name, args } => {
-                // The only callee the checker resolves without a declaration
-                // is the built-in `print`.
+                // Only built-in functions pass the checker without a declaration.
                 let Some(callee) = self.lookup(name) else {
-                    return self.print(args, pos);
+                    return self.builtin(name, args, pos);
                 };
                 self.chunk.emit(callee, pos);
                 self.temps += 1;
@@ -243,12 +242,17 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn print(&mut self, args: &[Expr], pos: Pos) {
+    fn builtin(&mut self, name: &str, args: &[Expr], pos: Pos) {
         let [value] = args else {
-            panic!("the checker gives print exactly one argument");
+            panic!("the checker gives built-in functions exactly one argument");
+        };
+        let op = match name {
+            "print" => Op::Print,
+            "len" => Op::Len,
+            _ => panic!("the checker rejects undefined function {name}"),
         };
         self.expr(value);
-        self.chunk.emit(Op::Print, pos);
+        self.chunk.emit(op, pos);
     }
 
     fn innermost_loop(&mut self) -> &mut Loop {
@@ -555,6 +559,11 @@ mod tests {
     #[test]
     fn print_compiles_to_instruction() {
         assert_eq!(code("print(1)"), [Op::Int(1), Op::Print]);
+    }
+
+    #[test]
+    fn len_compiles_to_instruction() {
+        assert_eq!(code(r#"len("a")"#), [Op::Str("a".into()), Op::Len]);
     }
 
     #[test]
