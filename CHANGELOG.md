@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-18
+
 ### Added
 - Strings: literals such as `"hello"` with the escapes `\n`, `\t`, `\\` and `\"`, the type `str`, concatenation with `+`, and comparison with `==`, `!=`, `<`, `<=`, `>` and `>=`, where order follows character codes. `print` writes a string without quotes
 - `len` returns the length of a string in bytes, so `len("привет")` is `12`
