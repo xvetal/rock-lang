@@ -181,6 +181,23 @@ impl<'a> Compiler<'a> {
                     self.logical(op, right, *pos);
                 }
             }
+            ExprKind::Array(items) => {
+                for item in items {
+                    self.expr(item);
+                    self.temps += 1;
+                }
+                self.temps -= items.len();
+                self.chunk.emit(Op::Array(items.len()), pos);
+            }
+            ExprKind::Index { target, indexes } => {
+                self.expr(target);
+                for (pos, index) in indexes {
+                    self.temps += 1;
+                    self.expr(index);
+                    self.temps -= 1;
+                    self.chunk.emit(Op::Index, *pos);
+                }
+            }
             ExprKind::Block(block) => self.block(block, pos),
             ExprKind::If {
                 cond,
@@ -559,6 +576,14 @@ mod tests {
     #[test]
     fn print_compiles_to_instruction() {
         assert_eq!(code("print(1)"), [Op::Int(1), Op::Print]);
+    }
+
+    #[test]
+    fn array_and_index() {
+        assert_eq!(
+            code("[1, 2][0]"),
+            [Op::Int(1), Op::Int(2), Op::Array(2), Op::Int(0), Op::Index]
+        );
     }
 
     #[test]

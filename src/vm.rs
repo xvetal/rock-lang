@@ -125,10 +125,32 @@ impl<W: Write> Vm<W> {
                     self.stack.push(Value::Unit);
                 }
                 Op::Len => {
-                    let Value::Str(s) = self.pop() else {
-                        panic!("the checker only passes a str to len");
+                    let len = match self.pop() {
+                        Value::Str(s) => s.len(),
+                        Value::Array(items) => items.len(),
+                        other => panic!("the checker rejects len of {other}"),
                     };
-                    self.stack.push(Value::Int(s.len() as i64));
+                    self.stack.push(Value::Int(len as i64));
+                }
+                Op::Array(count) => {
+                    let items = self.stack.split_off(self.stack.len() - count);
+                    self.stack.push(Value::Array(Rc::new(items)));
+                }
+                Op::Index => {
+                    let index = self.pop().as_int();
+                    let Value::Array(items) = self.pop() else {
+                        panic!("the checker only lets arrays be indexed");
+                    };
+                    let item = usize::try_from(index)
+                        .ok()
+                        .and_then(|i| items.get(i))
+                        .ok_or_else(|| {
+                            at(RuntimeErrorKind::IndexOutOfBounds {
+                                index,
+                                len: items.len(),
+                            })
+                        })?;
+                    self.stack.push(item.clone());
                 }
             }
         }
@@ -349,6 +371,8 @@ mod tests {
     #[test]
     fn break_and_continue_clean_up_stacks() {
         assert_eq!(vm("while true { 1 + break; };"), Ok(Value::Unit));
+        assert_eq!(vm("while true { [1, 2, break]; };"), Ok(Value::Unit));
+        assert_eq!(vm("while true { [1][break]; };"), Ok(Value::Unit));
         assert_eq!(
             vm("let mut i = 0; while i < 3 { i = i + 1; 2 * { let a = i; continue; }; };"),
             Ok(Value::Unit)
@@ -566,6 +590,19 @@ mod tests {
     }
 
     #[test]
+    fn arrays() {
+        assert_eq!(vm("[10, 20, 30][1]"), Ok(Value::Int(20)));
+        assert_eq!(vm("let a = [[1], [2, 3]]; a[1][1]"), Ok(Value::Int(3)));
+        assert_eq!(vm("len([1, 2, 3])"), Ok(Value::Int(3)));
+        assert_eq!(vm("[1, 2] == [1, 2]"), Ok(Value::Bool(true)));
+        assert_eq!(vm("[[1], [2]] != [[1], [3]]"), Ok(Value::Bool(true)));
+        assert_eq!(
+            output(r#"print([1, 2]); print([["a, b"], ["c"]]); print([[true]]);"#),
+            "[1, 2]\n[[\"a, b\"], [\"c\"]]\n[[true]]\n"
+        );
+    }
+
+    #[test]
     fn functions_shadow_print() {
         assert_eq!(output("fn print(x: int) -> int { x } print(1);"), "");
     }
@@ -720,6 +757,18 @@ mod tests {
                 Ok(Value::Unit),
                 Ok(Value::Int(6)),
             ]
+        );
+    }
+
+    #[test]
+    fn index_out_of_bounds() {
+        assert_eq!(
+            error("[1, 2, 3][3]"),
+            "1:10: index 3 out of bounds for length 3"
+        );
+        assert_eq!(
+            error("let a = [1];\na[0 - 1]"),
+            "2:2: index -1 out of bounds for length 1"
         );
     }
 }

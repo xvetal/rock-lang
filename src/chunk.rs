@@ -24,6 +24,8 @@ pub enum Op {
     Return,
     Print,
     Len,
+    Array(usize),
+    Index,
 }
 
 #[derive(Debug, Default, PartialEq)]

@@ -186,8 +186,8 @@ impl Parser {
         loop {
             match self.peek() {
                 Token::Eof => return,
-                Token::LParen | Token::LBrace => depth += 1,
-                Token::RParen | Token::RBrace if depth > 0 => depth -= 1,
+                Token::LParen | Token::LBrace | Token::LBracket => depth += 1,
+                Token::RParen | Token::RBrace | Token::RBracket if depth > 0 => depth -= 1,
                 _ if skip || depth > 0 => {}
                 Token::Semicolon => {
                     self.advance();
@@ -222,7 +222,7 @@ impl Parser {
         let pos = self.peek_pos();
         let name = self.ident("function name after 'fn'")?;
         self.expect(Token::LParen, "'('")?;
-        let params = self.list(Self::param)?;
+        let params = self.list(Token::RParen, Self::param)?;
         let ret = self.ret_type()?;
         self.expect(Token::LBrace, "'{'")?;
         self.in_fn = true;
@@ -273,6 +273,7 @@ impl Parser {
                 self.expect(Token::RParen, "')'")?;
                 Ok(Type::Unit)
             }
+            Token::LBracket => self.nested(Self::array_type),
             Token::Fn => self.nested(Self::fn_type),
             other => Err(ParseErrorKind::Expected {
                 what: "type",
@@ -282,9 +283,15 @@ impl Parser {
         }
     }
 
+    fn array_type(&mut self) -> Result<Type, ParseError> {
+        let element = self.ty()?;
+        self.expect(Token::RBracket, "']'")?;
+        Ok(Type::Array(Box::new(element)))
+    }
+
     fn fn_type(&mut self) -> Result<Type, ParseError> {
         self.expect(Token::LParen, "'('")?;
-        let params = self.list(Self::ty)?;
+        let params = self.list(Token::RParen, Self::ty)?;
         let ret = Box::new(self.ret_type()?);
         Ok(Type::Fn { params, ret })
     }
@@ -404,7 +411,26 @@ impl Parser {
             }
             .at(pos));
         }
-        self.primary()
+        self.postfix()
+    }
+
+    fn postfix(&mut self) -> Result<Expr, ParseError> {
+        let target = self.primary()?;
+        let mut indexes = Vec::new();
+        while self.peek() == &Token::LBracket {
+            let pos = self.peek_pos();
+            self.advance();
+            indexes.push((pos, self.expr()?));
+            self.expect(Token::RBracket, "']'")?;
+        }
+        Ok(match indexes.last() {
+            Some(&(pos, _)) => ExprKind::Index {
+                target: Box::new(target),
+                indexes,
+            }
+            .at(pos),
+            None => target,
+        })
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
@@ -421,13 +447,17 @@ impl Parser {
             Token::Ident(name) => {
                 if self.peek() == &Token::LParen {
                     self.advance();
-                    let args = self.list(Self::expr)?;
+                    let args = self.list(Token::RParen, Self::expr)?;
                     Ok(ExprKind::Call { name, args }.at(pos))
                 } else {
                     Ok(ExprKind::Var(name).at(pos))
                 }
             }
             Token::LBrace => Ok(ExprKind::Block(self.block()?).at(pos)),
+            Token::LBracket => {
+                let items = self.list(Token::RBracket, Self::expr)?;
+                Ok(ExprKind::Array(items).at(pos))
+            }
             Token::If => self.if_expr(pos),
             Token::While => self.while_expr(pos),
             Token::Return if self.in_fn => self.return_expr(pos),
@@ -501,12 +531,15 @@ impl Parser {
         Ok(ExprKind::Return(value).at(pos))
     }
 
+    // Parses items separated by commas up to `close`, the opening bracket
+    // already consumed.
     fn list<T>(
         &mut self,
+        close: Token,
         mut item: impl FnMut(&mut Self) -> Result<T, ParseError>,
     ) -> Result<Vec<T>, ParseError> {
         let mut items = Vec::new();
-        if self.peek() == &Token::RParen {
+        if self.peek() == &close {
             self.advance();
             return Ok(items);
         }
@@ -515,13 +548,13 @@ impl Parser {
             let pos = self.peek_pos();
             match self.advance() {
                 Token::Comma => {}
-                Token::RParen => return Ok(items),
+                token if token == close => return Ok(items),
                 other => {
-                    return Err(ParseErrorKind::Expected {
-                        what: "',' or ')'",
-                        found: other,
-                    }
-                    .at(pos));
+                    let what = match close {
+                        Token::RBracket => "',' or ']'",
+                        _ => "',' or ')'",
+                    };
+                    return Err(ParseErrorKind::Expected { what, found: other }.at(pos));
                 }
             }
         }
@@ -650,7 +683,14 @@ mod tests {
             | ExprKind::Return(None)
             | ExprKind::Break
             | ExprKind::Continue => {}
-            ExprKind::Call { args, .. } => args.iter_mut().for_each(strip),
+            ExprKind::Call { args, .. } | ExprKind::Array(args) => args.iter_mut().for_each(strip),
+            ExprKind::Index { target, indexes } => {
+                strip(target);
+                for (pos, index) in indexes {
+                    *pos = NO_POS;
+                    strip(index);
+                }
+            }
             ExprKind::Binary { left, rest } => {
                 strip(left);
                 for (_, pos, right) in rest {
@@ -759,6 +799,18 @@ mod tests {
         ExprKind::Binary {
             left: Box::new(left),
             rest,
+        }
+        .at(NO_POS)
+    }
+
+    fn array(items: Vec<Expr>) -> Expr {
+        ExprKind::Array(items).at(NO_POS)
+    }
+
+    fn index(target: Expr, indexes: Vec<Expr>) -> Expr {
+        ExprKind::Index {
+            target: Box::new(target),
+            indexes: indexes.into_iter().map(|i| (NO_POS, i)).collect(),
         }
         .at(NO_POS)
     }
@@ -978,6 +1030,37 @@ mod tests {
             parse(r#"f("hi")"#),
             Ok(call("f", vec![ExprKind::Str("hi".to_string()).at(NO_POS)]))
         );
+    }
+
+    #[test]
+    fn array_literals() {
+        assert_eq!(parse("[]"), Ok(array(vec![])));
+        assert_eq!(
+            parse("[1, x + 1, [2]]"),
+            Ok(array(vec![
+                int(1),
+                bin(Add, var("x"), int(1)),
+                array(vec![int(2)])
+            ]))
+        );
+    }
+
+    #[test]
+    fn indexing() {
+        assert_eq!(parse("a[0]"), Ok(index(var("a"), vec![int(0)])));
+        assert_eq!(
+            parse("a[i + 1][0]"),
+            Ok(index(var("a"), vec![bin(Add, var("i"), int(1)), int(0)]))
+        );
+        assert_eq!(
+            parse("[1, 2][0]"),
+            Ok(index(array(vec![int(1), int(2)]), vec![int(0)]))
+        );
+    }
+
+    #[test]
+    fn indexing_binds_tighter_than_unary_minus() {
+        assert_eq!(parse("-a[0]"), Ok(neg(index(var("a"), vec![int(0)]))));
     }
 
     #[test]
@@ -1327,6 +1410,10 @@ mod tests {
         assert_eq!(parse_type("str"), Ok(Type::Str));
         assert_eq!(parse_type("()"), Ok(Type::Unit));
         assert_eq!(
+            parse_type("[[int]]"),
+            Ok(Type::Array(Box::new(Type::Array(Box::new(Type::Int)))))
+        );
+        assert_eq!(
             parse_type("fn(int, bool) -> int"),
             Ok(Type::Fn {
                 params: vec![Type::Int, Type::Bool],
@@ -1351,6 +1438,8 @@ mod tests {
             "()",
             "fn()",
             "fn(int, fn(int) -> bool) -> fn() -> int",
+            "[[str]]",
+            "fn([int]) -> [bool]",
         ] {
             assert_eq!(parse_type(source).unwrap().to_string(), source);
         }
@@ -1453,6 +1542,20 @@ mod tests {
             panic!("expected a binary expression");
         };
         assert_eq!(rest[0].2.pos, Pos { line: 2, col: 3 });
+    }
+
+    #[test]
+    fn index_is_located_at_its_bracket() {
+        let expr = parse_located("a[0]\n  [1]");
+        assert_eq!(expr.pos, Pos { line: 2, col: 3 });
+        let ExprKind::Index { indexes, .. } = expr.kind else {
+            panic!("expected an index expression");
+        };
+        let positions: Vec<Pos> = indexes.iter().map(|(pos, _)| *pos).collect();
+        assert_eq!(
+            positions,
+            [Pos { line: 1, col: 2 }, Pos { line: 2, col: 3 }]
+        );
     }
 
     #[test]
@@ -2079,5 +2182,33 @@ mod tests {
                 ]
             );
         });
+    }
+
+    #[test]
+    fn unclosed_array() {
+        assert_eq!(
+            parse("[1, 2"),
+            Err(at(expected("',' or ']'", Token::Eof), 1, 6))
+        );
+        assert_eq!(
+            parse("[1 2]"),
+            Err(at(expected("',' or ']'", Token::Int(2)), 1, 4))
+        );
+        assert_eq!(parse("a[0"), Err(at(expected("']'", Token::Eof), 1, 4)));
+        assert_eq!(
+            parse_type("[int"),
+            Err(at(expected("']'", Token::Eof), 1, 5))
+        );
+    }
+
+    #[test]
+    fn recovery_skips_brackets() {
+        assert_eq!(
+            errors("let a = ) [1; 2];\nlet b = ;"),
+            [
+                "1:9: expected expression, found ')'",
+                "2:9: expected expression, found ';'"
+            ]
+        );
     }
 }

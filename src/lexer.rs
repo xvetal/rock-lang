@@ -38,6 +38,8 @@ pub enum Token {
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Eof,
 }
 
@@ -80,6 +82,8 @@ impl fmt::Display for Token {
             Token::RParen => write!(f, ")"),
             Token::LBrace => write!(f, "{{"),
             Token::RBrace => write!(f, "}}"),
+            Token::LBracket => write!(f, "["),
+            Token::RBracket => write!(f, "]"),
             Token::Eof => write!(f, "end of input"),
         }
     }
@@ -147,6 +151,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
             ')' => Token::RParen,
             '{' => Token::LBrace,
             '}' => Token::RBrace,
+            '[' => Token::LBracket,
+            ']' => Token::RBracket,
             '"' => Token::Str(string(&mut chars, &mut pos, start)?),
             '0'..='9' => {
                 let mut value = u64::from(c.to_digit(10).expect("c is an ASCII digit"));
@@ -476,7 +482,7 @@ mod tests {
         let source = "let mut x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 \
                       == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; \
                       { } if x { } else { } while x { break ; continue } \
-                      fn f ( a : int ) -> int { return } \
+                      fn f ( a : int ) -> int { return } [ ] \
                       \"a\\\"b\\\\c\\nd\\te\"";
         let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens

@@ -25,6 +25,7 @@ pub enum RuntimeErrorKind {
     DivisionByZero,
     IntegerOverflow,
     StackOverflow,
+    IndexOutOfBounds { index: i64, len: usize },
     Output(io::ErrorKind),
 }
 
@@ -41,6 +42,9 @@ impl fmt::Display for RuntimeErrorKind {
             RuntimeErrorKind::IntegerOverflow => write!(f, "integer overflow"),
             RuntimeErrorKind::StackOverflow => {
                 write!(f, "stack overflow: more than {MAX_CALL_DEPTH} nested calls")
+            }
+            RuntimeErrorKind::IndexOutOfBounds { index, len } => {
+                write!(f, "index {index} out of bounds for length {len}")
             }
             RuntimeErrorKind::Output(kind) => write!(f, "cannot write output: {kind}"),
         }
@@ -103,6 +107,10 @@ mod tests {
             (
                 RuntimeErrorKind::StackOverflow,
                 "stack overflow: more than 1000 nested calls",
+            ),
+            (
+                RuntimeErrorKind::IndexOutOfBounds { index: -1, len: 3 },
+                "index -1 out of bounds for length 3",
             ),
             (
                 RuntimeErrorKind::Output(io::ErrorKind::BrokenPipe),

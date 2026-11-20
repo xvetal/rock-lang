@@ -8,6 +8,7 @@ pub enum Value {
     Int(i64),
     Bool(bool),
     Str(Rc<str>),
+    Array(Rc<Vec<Value>>),
     Unit,
     Function(Rc<Function>),
 }
@@ -18,6 +19,20 @@ impl fmt::Display for Value {
             Value::Int(n) => write!(f, "{n}"),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Str(s) => write!(f, "{s}"),
+            Value::Array(items) => {
+                write!(f, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    // Quotes keep `["a, b"]` apart from `["a", "b"]`.
+                    match item {
+                        Value::Str(s) => write!(f, "{s:?}")?,
+                        _ => write!(f, "{item}")?,
+                    }
+                }
+                write!(f, "]")
+            }
             Value::Unit => write!(f, "()"),
             Value::Function(function) => write!(f, "<fn {}>", function.name),
         }

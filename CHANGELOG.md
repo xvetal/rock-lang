@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Read-only arrays: literals such as `[1, 2, 3]`, types such as `[int]` and `[[str]]`, indexing with `a[i]`, which fails at runtime outside the array, comparison with `==` and `!=`, and `len` of an array. `print` writes strings inside an array in quotes, as in `["a", "b"]`
+
 ## [0.11.0] - 2026-11-18
 
 ### Added

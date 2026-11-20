@@ -14,9 +14,10 @@ Version 0.11.0: programs are statically typed and type-checked before they run, 
 - Blocks with lexical scope; `if`/`else` and blocks are expressions
 - `while` loops with `break` and `continue`
 - Functions with `fn` and `return`, including recursion; parameters and return values have types, e.g. `fn add(a: int, b: int) -> int`; parameters can be `mut`; functions are values, can be called before their declaration, and see only their parameters and locals
-- The built-in `print` and `len`, which returns the length of a string in bytes
-- Static types `int`, `bool`, `str`, `()` and function types such as `fn(int) -> int`
-- Errors with line and column: parse errors (including nesting deeper than 256 levels) and type errors (mismatched types, undefined names, wrong argument counts, assignment to immutable variables), all reported at once, and runtime errors (division by zero, integer overflow, stack overflow)
+- Read-only arrays such as `[1, 2, 3]` with indexing `a[i]`
+- The built-in `print` and `len`, which returns the length of a string in bytes or of an array
+- Static types `int`, `bool`, `str`, `()`, array types such as `[int]` and function types such as `fn(int) -> int`
+- Errors with line and column: parse errors (including nesting deeper than 256 levels) and type errors (mismatched types, undefined names, wrong argument counts, assignment to immutable variables), all reported at once, and runtime errors (division by zero, integer overflow, stack overflow, index out of bounds)
 - Warnings with line and column: unused variables and parameters (names starting with `_` are exempt) and `mut` that is never needed
 - Interactive REPL, running programs from a file, and checking them without running with `rock check`
 

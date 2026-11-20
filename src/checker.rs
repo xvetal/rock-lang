@@ -21,7 +21,6 @@ pub enum CheckErrorKind {
     UndefinedFunction(String),
     AssignToImmutable(String),
     DuplicateFunction(String),
-    PrintArgumentCount(usize),
     Mismatch {
         expected: Type,
         found: Type,
@@ -33,6 +32,9 @@ pub enum CheckErrorKind {
         found: usize,
     },
     CannotCompare(Type),
+    EmptyArray,
+    NotIndexable(Type),
+    NoLength(Type),
 }
 
 impl CheckErrorKind {
@@ -50,9 +52,6 @@ impl fmt::Display for CheckErrorKind {
                 write!(f, "cannot assign to immutable variable: {name}")
             }
             CheckErrorKind::DuplicateFunction(name) => write!(f, "duplicate function: {name}"),
-            CheckErrorKind::PrintArgumentCount(found) => {
-                write!(f, "print expects 1 argument, got {found}")
-            }
             CheckErrorKind::Mismatch { expected, found } => {
                 write!(f, "expected {expected}, found {found}")
             }
@@ -66,6 +65,9 @@ impl fmt::Display for CheckErrorKind {
                 write!(f, "{name} expects {expected} argument{s}, got {found}")
             }
             CheckErrorKind::CannotCompare(ty) => write!(f, "cannot compare values of type {ty}"),
+            CheckErrorKind::EmptyArray => write!(f, "cannot infer the type of an empty array"),
+            CheckErrorKind::NotIndexable(ty) => write!(f, "cannot index a value of type {ty}"),
+            CheckErrorKind::NoLength(ty) => write!(f, "expected str or array, found {ty}"),
         }
     }
 }
@@ -210,20 +212,27 @@ fn block_value_pos(block: &Block, fallback: Pos) -> Pos {
 }
 
 fn fits(found: &Type, expected: &Type) -> bool {
-    found == expected || matches!(found, Type::Never | Type::Error) || *expected == Type::Error
-}
-
-// Built-in functions with a fixed type. `print` takes a value of any type, so
-// it is checked separately.
-fn builtin(name: &str) -> Option<Type> {
-    match name {
-        "len" => Some(Type::Fn {
-            params: vec![Type::Str],
-            ret: Box::new(Type::Int),
-        }),
-        _ => None,
+    match (found, expected) {
+        (Type::Array(found), Type::Array(expected)) => fits(found, expected),
+        _ => {
+            found == expected
+                || matches!(found, Type::Never | Type::Error)
+                || *expected == Type::Error
+        }
     }
 }
+
+fn comparable(ty: &Type) -> bool {
+    match ty {
+        Type::Fn { .. } => false,
+        Type::Array(element) => comparable(element),
+        _ => true,
+    }
+}
+
+// Built-in functions take arguments of several types, which a function type
+// cannot express, so they are not values and are checked one by one.
+const BUILTINS: [&str; 2] = ["print", "len"];
 
 struct Checker<'a> {
     functions: &'a [(String, Type)],
@@ -358,10 +367,10 @@ impl<'a> Checker<'a> {
             ExprKind::Call { name, args } => {
                 let callee = match self.lookup(name) {
                     Some(ty) => ty,
-                    None if name == "print" => return self.print(args, pos),
-                    None => builtin(name).unwrap_or_else(|| {
-                        self.error(CheckErrorKind::UndefinedFunction(name.clone()), pos)
-                    }),
+                    None if BUILTINS.contains(&name.as_str()) => {
+                        return self.builtin(name, args, pos);
+                    }
+                    None => self.error(CheckErrorKind::UndefinedFunction(name.clone()), pos),
                 };
                 self.call(name, callee, args, pos)
             }
@@ -393,6 +402,32 @@ impl<'a> Checker<'a> {
                 }
                 self.diverges = diverges;
                 Type::Bool
+            }
+            ExprKind::Array(items) => {
+                let Some((first, rest)) = items.split_first() else {
+                    return self.error(CheckErrorKind::EmptyArray, pos);
+                };
+                let mut ty = self.expr(first);
+                for item in rest {
+                    let found = self.expr(item);
+                    ty = self.join(ty, found, value_pos(item));
+                }
+                Type::Array(Box::new(ty))
+            }
+            ExprKind::Index { target, indexes } => {
+                let mut ty = self.expr(target);
+                let mut ty_pos = value_pos(target);
+                for (pos, index) in indexes {
+                    ty = match ty {
+                        Type::Array(element) => *element,
+                        Type::Error | Type::Never => ty,
+                        other => self.error(CheckErrorKind::NotIndexable(other), ty_pos),
+                    };
+                    let found = self.expr(index);
+                    self.expect(&Type::Int, &found, value_pos(index));
+                    ty_pos = *pos;
+                }
+                ty
             }
             ExprKind::Block(block) => self.block(block),
             ExprKind::If {
@@ -487,7 +522,7 @@ impl<'a> Checker<'a> {
         let right_ty = self.expr(right);
         if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
             let ty = self.join(left_ty, right_ty, value_pos(right));
-            if matches!(ty, Type::Fn { .. }) {
+            if !comparable(&ty) {
                 self.error(CheckErrorKind::CannotCompare(ty), pos);
             }
             return Type::Bool;
@@ -506,12 +541,24 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn print(&mut self, args: &[Expr], pos: Pos) -> Type {
-        if args.len() != 1 {
-            self.error(CheckErrorKind::PrintArgumentCount(args.len()), pos);
+    fn builtin(&mut self, name: &str, args: &[Expr], pos: Pos) -> Type {
+        let ret = if name == "len" { Type::Int } else { Type::Unit };
+        let [arg] = args else {
+            let kind = CheckErrorKind::ArgumentCount {
+                name: name.to_string(),
+                expected: 1,
+                found: args.len(),
+            };
+            self.error(kind, pos);
+            self.args(args);
+            return ret;
+        };
+        let ty = self.expr(arg);
+        let sized = matches!(ty, Type::Str | Type::Array(_) | Type::Error | Type::Never);
+        if name == "len" && !sized {
+            self.error(CheckErrorKind::NoLength(ty), value_pos(arg));
         }
-        self.args(args);
-        Type::Unit
+        ret
     }
 }
 
@@ -572,6 +619,10 @@ mod tests {
             r#""a" < "b" && "b" >= "a""#,
             r#"len("abc") + 1"#,
             "fn len(n: int) -> int { n } len(1)",
+            "let a = [[1, 2], [3]]; a[1][0] + len(a) + len(a[0])",
+            "fn f(xs: [str]) -> str { xs[0] } f([\"a\"]) == \"a\"",
+            "[1] == [2] && [[true]] != [[false]]",
+            "fn f(n: int) -> [int] { [n, return [n]] }",
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
         }
@@ -895,11 +946,33 @@ mod tests {
 
     #[test]
     fn len_errors() {
-        assert_eq!(error("len(1)"), "1:5: expected str, found int");
+        assert_eq!(error("len(1)"), "1:5: expected str or array, found int");
         assert_eq!(
             error(r#"len("a", "b")"#),
             "1:1: len expects 1 argument, got 2"
         );
         assert_eq!(error("let f = len;"), "1:9: undefined variable: len");
+    }
+
+    #[test]
+    fn array_errors() {
+        assert_eq!(error("[1, true]"), "1:5: expected int, found bool");
+        assert_eq!(error("[]"), "1:1: cannot infer the type of an empty array");
+        assert_eq!(error("1[0]"), "1:1: cannot index a value of type int");
+        assert_eq!(error("[1][0][0]"), "1:4: cannot index a value of type int");
+        assert_eq!(error("\"ab\"[0]"), "1:1: cannot index a value of type str");
+        assert_eq!(error("[1][true]"), "1:5: expected int, found bool");
+        assert_eq!(
+            error("fn f() {} [f] == [f]"),
+            "1:15: cannot compare values of type [fn()]"
+        );
+        assert_eq!(
+            error("fn f(xs: [int]) {} f([true])"),
+            "1:22: expected [int], found [bool]"
+        );
+        assert_eq!(
+            error("let a = [y]; a[0] + 1"),
+            "1:10: undefined variable: y"
+        );
     }
 }

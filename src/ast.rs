@@ -59,6 +59,13 @@ pub enum ExprKind {
         left: Box<Expr>,
         rest: Vec<(LogicalOp, Pos, Expr)>,
     },
+    Array(Vec<Expr>),
+    // `a[i][j]` is one node, for the same reason as `Binary`. Each index keeps
+    // the position of its `[`.
+    Index {
+        target: Box<Expr>,
+        indexes: Vec<(Pos, Expr)>,
+    },
     Block(Block),
     If {
         cond: Box<Expr>,
@@ -97,6 +104,7 @@ pub enum Type {
     // The type of an expression that failed to check. It fits any type,
     // so one mistake is reported once.
     Error,
+    Array(Box<Type>),
     Fn { params: Vec<Type>, ret: Box<Type> },
 }
 
@@ -109,6 +117,7 @@ impl fmt::Display for Type {
             Type::Unit => write!(f, "()"),
             Type::Never => write!(f, "!"),
             Type::Error => write!(f, "{{error}}"),
+            Type::Array(element) => write!(f, "[{element}]"),
             Type::Fn { params, ret } => {
                 write!(f, "fn(")?;
                 for (i, param) in params.iter().enumerate() {
