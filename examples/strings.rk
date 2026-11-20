@@ -10,4 +10,8 @@ while i < 5 {
 }
 print(greet("Rock"));
 print(line);
+
+let word = "rocket";
+print(word[..4]);
+print(word[4..] + word[1..3]);
 line == "*****"

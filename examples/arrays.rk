@@ -22,6 +22,7 @@ while i < len(squares) {
     i = i + 1;
 }
 print(squares);
+print(squares[1..3]);
 print(zeros);
 
 let mut words: [str] = [];

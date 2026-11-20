@@ -64,7 +64,7 @@ pub enum ExprKind {
     // the position of its `[`.
     Index {
         target: Box<Expr>,
-        indexes: Vec<(Pos, Expr)>,
+        indexes: Vec<(Pos, Index)>,
     },
     Block(Block),
     If {
@@ -87,11 +87,32 @@ impl ExprKind {
     }
 }
 
+// What stands between the brackets of `a[...]`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Index {
+    At(Expr),
+    // `a[start..end]`, where either bound may be left out.
+    Slice {
+        start: Option<Expr>,
+        end: Option<Expr>,
+    },
+}
+
+impl Index {
+    pub fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        let (first, second) = match self {
+            Index::At(index) => (Some(index), None),
+            Index::Slice { start, end } => (start.as_ref(), end.as_ref()),
+        };
+        first.into_iter().chain(second)
+    }
+}
+
 // A variable, possibly indexed, which can be changed in place.
 pub struct Place<'a> {
     pub name: &'a str,
     pub pos: Pos,
-    pub indexes: &'a [(Pos, Expr)],
+    pub indexes: &'a [(Pos, Index)],
 }
 
 impl Expr {
@@ -197,7 +218,7 @@ pub enum Stmt {
     },
     Assign {
         name: String,
-        indexes: Vec<(Pos, Expr)>,
+        indexes: Vec<(Pos, Index)>,
         value: Expr,
         pos: Pos,
     },

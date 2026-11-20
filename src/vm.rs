@@ -3,7 +3,7 @@ use std::mem;
 use std::rc::Rc;
 
 use crate::chunk::{Bytecode, Function, Op};
-use crate::runtime::{MAX_CALL_DEPTH, RuntimeError, RuntimeErrorKind, binary, unary};
+use crate::runtime::{MAX_CALL_DEPTH, RuntimeError, RuntimeErrorKind, binary, slice, unary};
 use crate::value::Value;
 
 pub struct Vm<W: Write> {
@@ -151,6 +151,12 @@ impl<W: Write> Vm<W> {
                             })
                         })?;
                     self.stack.push(item.clone());
+                }
+                Op::Slice { start, end } => {
+                    let end = end.then(|| self.pop().as_int());
+                    let start = start.then(|| self.pop().as_int());
+                    let value = self.pop();
+                    self.stack.push(slice(value, start, end).map_err(at)?);
                 }
                 Op::SetIndex { slot, depth } => {
                     let indexes = self.stack.split_off(self.stack.len() - depth);
@@ -409,6 +415,7 @@ mod tests {
         assert_eq!(vm("while true { 1 + break; };"), Ok(Value::Unit));
         assert_eq!(vm("while true { [1, 2, break]; };"), Ok(Value::Unit));
         assert_eq!(vm("while true { [1][break]; };"), Ok(Value::Unit));
+        assert_eq!(vm("while true { [1][0..break]; };"), Ok(Value::Unit));
         assert_eq!(
             vm("let mut a = [[0]]; while true { a[0][break] = 1; } a[0][0]"),
             Ok(Value::Int(0))
@@ -683,6 +690,30 @@ mod tests {
     }
 
     #[test]
+    fn slices() {
+        assert_eq!(vm(r#""hello"[1..3]"#), Ok(Value::Str("el".into())));
+        assert_eq!(
+            vm(r#""hello"[..2] + "hello"[3..]"#),
+            Ok(Value::Str("helo".into()))
+        );
+        assert_eq!(vm(r#""hello"[5..]"#), Ok(Value::Str("".into())));
+        assert_eq!(vm(r#""привет"[2..6]"#), Ok(Value::Str("ри".into())));
+        assert_eq!(
+            output("let a = [1, 2, 3, 4]; print(a[1..3]); print(a[..0]); print(a[..]);"),
+            "[2, 3]\n[]\n[1, 2, 3, 4]\n"
+        );
+        assert_eq!(vm("[[1, 2], [3]][..1][0][1..][0]"), Ok(Value::Int(2)));
+    }
+
+    #[test]
+    fn slice_is_a_copy() {
+        assert_eq!(
+            vm("let mut a = [1, 2]; let b = a[..1]; a[0] = 5; b[0] * 10 + a[0]"),
+            Ok(Value::Int(15))
+        );
+    }
+
+    #[test]
     fn functions_shadow_print() {
         assert_eq!(output("fn print(x: int) -> int { x } print(1);"), "");
     }
@@ -869,6 +900,34 @@ mod tests {
         assert_eq!(
             error("let mut a = [[1]];\npush(a[1], 2);"),
             "2:1: index 1 out of bounds for length 1"
+        );
+    }
+
+    #[test]
+    fn slice_out_of_bounds() {
+        assert_eq!(
+            error("[1, 2][1..3]"),
+            "1:7: slice index 3 out of bounds for length 2"
+        );
+        assert_eq!(
+            error("let s = \"ab\";\ns[0 - 1..]"),
+            "2:2: slice index -1 out of bounds for length 2"
+        );
+        assert_eq!(
+            error("[1, 2][2..1]"),
+            "1:7: slice starts at 2 but ends at 1"
+        );
+    }
+
+    #[test]
+    fn slice_inside_char() {
+        assert_eq!(
+            error(r#""привет"[1..]"#),
+            "1:9: byte index 1 is not a char boundary"
+        );
+        assert_eq!(
+            error(r#""aж"[..2]"#),
+            "1:5: byte index 2 is not a char boundary"
         );
     }
 }

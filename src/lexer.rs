@@ -40,6 +40,7 @@ pub enum Token {
     RBrace,
     LBracket,
     RBracket,
+    DotDot,
     Eof,
 }
 
@@ -84,6 +85,7 @@ impl fmt::Display for Token {
             Token::RBrace => write!(f, "}}"),
             Token::LBracket => write!(f, "["),
             Token::RBracket => write!(f, "]"),
+            Token::DotDot => write!(f, ".."),
             Token::Eof => write!(f, "end of input"),
         }
     }
@@ -153,6 +155,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
             '}' => Token::RBrace,
             '[' => Token::LBracket,
             ']' => Token::RBracket,
+            '.' if eat(&mut chars, &mut pos, '.') => Token::DotDot,
             '"' => Token::Str(string(&mut chars, &mut pos, start)?),
             '0'..='9' => {
                 let mut value = u64::from(c.to_digit(10).expect("c is an ASCII digit"));
@@ -482,7 +485,7 @@ mod tests {
         let source = "let mut x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 \
                       == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; \
                       { } if x { } else { } while x { break ; continue } \
-                      fn f ( a : int ) -> int { return } [ ] \
+                      fn f ( a : int ) -> int { return } [ ] [ .. ] \
                       \"a\\\"b\\\\c\\nd\\te\"";
         let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens
@@ -505,6 +508,22 @@ mod tests {
                 Token::Arrow,
                 Token::Minus,
                 Token::Int(1),
+                Token::Eof
+            ])
+        );
+    }
+
+    #[test]
+    fn dot_dot() {
+        assert_eq!(
+            tokens("a[1..n]"),
+            Ok(vec![
+                ident("a"),
+                Token::LBracket,
+                Token::Int(1),
+                Token::DotDot,
+                ident("n"),
+                Token::RBracket,
                 Token::Eof
             ])
         );
@@ -590,6 +609,14 @@ mod tests {
         assert_eq!(
             tokens("a & b"),
             Err("1:3: unexpected character: '&'".to_string())
+        );
+    }
+
+    #[test]
+    fn single_dot() {
+        assert_eq!(
+            tokens("a.len"),
+            Err("1:2: unexpected character: '.'".to_string())
         );
     }
 

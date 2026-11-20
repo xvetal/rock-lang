@@ -4,7 +4,10 @@
 - [ ] Switch to a Pratt parser when more precedence levels appear
 
 ## Strings
-- [ ] Slicing `s[a..b]` by bytes
+- [ ] `bytes(s)`, which returns the bytes of a string as `[int]`
+
+## Ranges
+- [ ] Ranges as values, such as `let r = 0..n;`, together with `for i in 0..n`
 
 ## Arrays
 - [ ] `pop`, once there is `Option` to return from an empty array

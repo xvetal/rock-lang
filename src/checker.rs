@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::ast::{BinaryOp, Block, Expr, ExprKind, FnDecl, Program, Stmt, Type, UnaryOp};
+use crate::ast::{BinaryOp, Block, Expr, ExprKind, FnDecl, Index, Program, Stmt, Type, UnaryOp};
 use crate::lexer::Pos;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +34,8 @@ pub enum CheckErrorKind {
     CannotCompare(Type),
     EmptyArray,
     NotIndexable(Type),
+    NotSliceable(Type),
+    AssignToSlice,
     NoLength(Type),
     NotArray(Type),
     PushToValue,
@@ -69,6 +71,8 @@ impl fmt::Display for CheckErrorKind {
             CheckErrorKind::CannotCompare(ty) => write!(f, "cannot compare values of type {ty}"),
             CheckErrorKind::EmptyArray => write!(f, "cannot infer the type of an empty array"),
             CheckErrorKind::NotIndexable(ty) => write!(f, "cannot index a value of type {ty}"),
+            CheckErrorKind::NotSliceable(ty) => write!(f, "cannot slice a value of type {ty}"),
+            CheckErrorKind::AssignToSlice => write!(f, "cannot assign to a slice"),
             CheckErrorKind::NoLength(ty) => write!(f, "expected str or array, found {ty}"),
             CheckErrorKind::NotArray(ty) => write!(f, "expected array, found {ty}"),
             CheckErrorKind::PushToValue => {
@@ -556,22 +560,29 @@ impl<'a> Checker<'a> {
 
     // `pos` locates the value of type `ty`, so an error can point at the
     // part of `a[i][j]` that is not an array.
-    fn index(&mut self, mut ty: Type, mut pos: Pos, indexes: &[(Pos, Expr)]) -> Type {
+    fn index(&mut self, mut ty: Type, mut pos: Pos, indexes: &[(Pos, Index)]) -> Type {
         for (bracket, index) in indexes {
-            ty = match ty {
-                Type::Array(element) => *element,
-                Type::Error | Type::Never => ty,
-                other => self.error(CheckErrorKind::NotIndexable(other), pos),
+            ty = match (ty, index) {
+                (Type::Array(element), Index::At(_)) => *element,
+                (ty @ (Type::Str | Type::Array(_)), Index::Slice { .. }) => ty,
+                (ty @ (Type::Error | Type::Never), _) => ty,
+                (other, Index::At(_)) => self.error(CheckErrorKind::NotIndexable(other), pos),
+                (other, Index::Slice { .. }) => {
+                    self.error(CheckErrorKind::NotSliceable(other), pos)
+                }
             };
-            let found = self.expr(index);
-            self.expect(&Type::Int, &found, value_pos(index));
+            for bound in index.exprs() {
+                let found = self.expr(bound);
+                self.expect(&Type::Int, &found, value_pos(bound));
+            }
             pos = *bracket;
         }
         ty
     }
 
     // The type of a variable, possibly indexed, that is about to change.
-    fn place(&mut self, name: &str, indexes: &[(Pos, Expr)], pos: Pos) -> Type {
+    // A slice is a new value, so a change to it would be lost.
+    fn place(&mut self, name: &str, indexes: &[(Pos, Index)], pos: Pos) -> Type {
         let ty = match self.local(name) {
             Some(local) => {
                 local.assigned = true;
@@ -583,6 +594,12 @@ impl<'a> Checker<'a> {
             }
             None => self.error(CheckErrorKind::UndefinedVariable(name.to_string()), pos),
         };
+        let slice = indexes
+            .iter()
+            .find(|(_, index)| matches!(index, Index::Slice { .. }));
+        if let Some((bracket, _)) = slice {
+            self.error(CheckErrorKind::AssignToSlice, *bracket);
+        }
         self.index(ty, pos, indexes)
     }
 
@@ -709,6 +726,10 @@ mod tests {
             "let a = if true { [] } else { [1] }; a[0] + 1",
             "let a = [[1], []]; let n: int = len(a); a == [] || n == 2",
             "fn f(mut xs: [int]) -> [int] { xs[0] = 1; xs }",
+            r#"let s = "hello"; let t: str = s[1..3] + s[..1] + s[3..] + s[..]; t"#,
+            "let a = [[1, 2], [3]]; let b: [[int]] = a[1..]; a[..1][0][1..][0] + len(b)",
+            "let mut a = [[1, 2]]; a[0] = a[0][..1]; push(a, a[0][1..]); a",
+            "[][0..0] == [1]",
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
         }
@@ -1134,6 +1155,41 @@ mod tests {
         assert_eq!(
             error("let mut a = [1]; push(a); a"),
             "1:18: push expects 2 arguments, got 1"
+        );
+    }
+
+    #[test]
+    fn slice_errors() {
+        assert_eq!(error("1[0..1]"), "1:1: cannot slice a value of type int");
+        assert_eq!(error("[1][0][..]"), "1:4: cannot slice a value of type int");
+        assert_eq!(error(r#""ab"[true..]"#), "1:6: expected int, found bool");
+        assert_eq!(error(r#""ab"[..""]"#), "1:8: expected int, found str");
+        assert_eq!(
+            error("let a: [bool] = [1, 2][..1];"),
+            "1:23: expected [bool], found [int]"
+        );
+    }
+
+    #[test]
+    fn slice_assignment_errors() {
+        assert_eq!(
+            error(r#"let mut s = "abc"; s[1..] = "x"; s"#),
+            "1:21: cannot assign to a slice"
+        );
+        assert_eq!(
+            error("let mut a = [[1]]; a[..1][0] = [2]; a"),
+            "1:21: cannot assign to a slice"
+        );
+        assert_eq!(
+            error("let mut a = [1]; push(a[0..1], 2); a"),
+            "1:24: cannot assign to a slice"
+        );
+        assert_eq!(
+            errors(r#"let s = "abc"; s[..1] = "x"; s"#),
+            [
+                "1:16: cannot assign to immutable variable: s",
+                "1:17: cannot assign to a slice"
+            ]
         );
     }
 }

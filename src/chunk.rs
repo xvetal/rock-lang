@@ -26,6 +26,8 @@ pub enum Op {
     Len,
     Array(usize),
     Index,
+    // Each flag tells whether that bound is on the stack.
+    Slice { start: bool, end: bool },
     SetIndex { slot: usize, depth: usize },
     Push { slot: usize, depth: usize },
 }

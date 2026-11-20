@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::ast::{
-    BinaryOp, Block, Expr, ExprKind, FnDecl, LogicalOp, Param, Program, Stmt, Type, UnaryOp,
+    BinaryOp, Block, Expr, ExprKind, FnDecl, Index, LogicalOp, Param, Program, Stmt, Type, UnaryOp,
 };
 use crate::lexer::{Located, Pos, Token};
 
@@ -443,7 +443,7 @@ impl Parser {
         while self.peek() == &Token::LBracket {
             let pos = self.peek_pos();
             self.advance();
-            indexes.push((pos, self.expr()?));
+            indexes.push((pos, self.index()?));
             self.expect(Token::RBracket, "']'")?;
         }
         Ok(match indexes.last() {
@@ -454,6 +454,25 @@ impl Parser {
             .at(pos),
             None => target,
         })
+    }
+
+    fn index(&mut self) -> Result<Index, ParseError> {
+        let start = match self.peek() {
+            Token::DotDot => None,
+            _ => {
+                let index = self.expr()?;
+                if self.peek() != &Token::DotDot {
+                    return Ok(Index::At(index));
+                }
+                Some(index)
+            }
+        };
+        self.advance();
+        let end = match self.peek() {
+            Token::RBracket => None,
+            _ => Some(self.expr()?),
+        };
+        Ok(Index::Slice { start, end })
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
@@ -704,10 +723,7 @@ mod tests {
             ExprKind::Call { args, .. } | ExprKind::Array(args) => args.iter_mut().for_each(strip),
             ExprKind::Index { target, indexes } => {
                 strip(target);
-                for (pos, index) in indexes {
-                    *pos = NO_POS;
-                    strip(index);
-                }
+                strip_indexes(indexes);
             }
             ExprKind::Binary { left, rest } => {
                 strip(left);
@@ -741,6 +757,16 @@ mod tests {
         }
     }
 
+    fn strip_indexes(indexes: &mut [(Pos, Index)]) {
+        for (pos, index) in indexes {
+            *pos = NO_POS;
+            match index {
+                Index::At(index) => strip(index),
+                Index::Slice { start, end } => start.iter_mut().chain(end).for_each(strip),
+            }
+        }
+    }
+
     fn strip_block(block: &mut Block) {
         block.stmts.iter_mut().for_each(strip_stmt);
         block.expr.iter_mut().for_each(|e| strip(e));
@@ -760,10 +786,7 @@ mod tests {
                 ..
             } => {
                 *pos = NO_POS;
-                for (pos, index) in indexes {
-                    *pos = NO_POS;
-                    strip(index);
-                }
+                strip_indexes(indexes);
                 strip(value);
             }
             Stmt::Fn(decl) => {
@@ -840,11 +863,19 @@ mod tests {
     }
 
     fn index(target: Expr, indexes: Vec<Expr>) -> Expr {
+        indexed(target, indexes.into_iter().map(Index::At).collect())
+    }
+
+    fn indexed(target: Expr, indexes: Vec<Index>) -> Expr {
         ExprKind::Index {
             target: Box::new(target),
             indexes: indexes.into_iter().map(|i| (NO_POS, i)).collect(),
         }
         .at(NO_POS)
+    }
+
+    fn slice(start: Option<Expr>, end: Option<Expr>) -> Index {
+        Index::Slice { start, end }
     }
 
     fn neg(operand: Expr) -> Expr {
@@ -1087,6 +1118,55 @@ mod tests {
         assert_eq!(
             parse("[1, 2][0]"),
             Ok(index(array(vec![int(1), int(2)]), vec![int(0)]))
+        );
+    }
+
+    #[test]
+    fn slicing() {
+        assert_eq!(
+            parse("s[1..3]"),
+            Ok(indexed(var("s"), vec![slice(Some(int(1)), Some(int(3)))]))
+        );
+        assert_eq!(
+            parse("s[i + 1..]"),
+            Ok(indexed(
+                var("s"),
+                vec![slice(Some(bin(Add, var("i"), int(1))), None)]
+            ))
+        );
+        assert_eq!(
+            parse("s[..len(s)]"),
+            Ok(indexed(
+                var("s"),
+                vec![slice(None, Some(call("len", vec![var("s")])))]
+            ))
+        );
+        assert_eq!(
+            parse("s[..]"),
+            Ok(indexed(var("s"), vec![slice(None, None)]))
+        );
+        assert_eq!(
+            parse("a[1..][0]"),
+            Ok(indexed(
+                var("a"),
+                vec![slice(Some(int(1)), None), Index::At(int(0))]
+            ))
+        );
+    }
+
+    #[test]
+    fn slice_assignment() {
+        assert_eq!(
+            parse_program("s[1..] = t;"),
+            Ok(Program {
+                stmts: vec![Stmt::Assign {
+                    name: "s".to_string(),
+                    indexes: vec![(NO_POS, slice(Some(int(1)), None))],
+                    value: var("t"),
+                    pos: NO_POS
+                }],
+                expr: None
+            })
         );
     }
 
@@ -1363,7 +1443,7 @@ mod tests {
             Ok(Program {
                 stmts: vec![Stmt::Assign {
                     name: "a".to_string(),
-                    indexes: vec![(NO_POS, int(0)), (NO_POS, var("i"))],
+                    indexes: vec![(NO_POS, Index::At(int(0))), (NO_POS, Index::At(var("i")))],
                     value: int(1),
                     pos: NO_POS
                 }],
@@ -2322,6 +2402,34 @@ mod tests {
         assert_eq!(
             parse_program("let a: int 1;"),
             Err(at(expected("'='", Token::Int(1)), 1, 12))
+        );
+    }
+
+    #[test]
+    fn range_outside_brackets() {
+        assert_eq!(
+            parse("1..2"),
+            Err(at(ParseErrorKind::Unexpected(Token::DotDot), 1, 2))
+        );
+        assert_eq!(
+            parse_program("let r = 0..n;"),
+            Err(at(expected("';'", Token::DotDot), 1, 10))
+        );
+        assert_eq!(
+            parse("[1..2]"),
+            Err(at(expected("',' or ']'", Token::DotDot), 1, 3))
+        );
+    }
+
+    #[test]
+    fn bad_slices() {
+        assert_eq!(
+            parse("a[1..2..3]"),
+            Err(at(expected("']'", Token::DotDot), 1, 7))
+        );
+        assert_eq!(
+            parse("a[1.."),
+            Err(at(expected("expression", Token::Eof), 1, 6))
         );
     }
 }

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::ast::{Block, Expr, ExprKind, FnDecl, LogicalOp, Program, Stmt};
+use crate::ast::{Block, Expr, ExprKind, FnDecl, Index, LogicalOp, Program, Stmt};
 use crate::chunk::{Bytecode, Chunk, Function, Op};
 use crate::lexer::Pos;
 
@@ -98,10 +98,7 @@ impl<'a> Compiler<'a> {
                 } => {
                     self.expr(value);
                     self.temps += 1;
-                    for (_, index) in indexes {
-                        self.expr(index);
-                        self.temps += 1;
-                    }
+                    self.place_indexes(indexes);
                     self.temps -= indexes.len() + 1;
                     let slot = self.local(name).expect(RESOLVED);
                     let op = match indexes.len() {
@@ -208,9 +205,26 @@ impl<'a> Compiler<'a> {
                 self.expr(target);
                 for (pos, index) in indexes {
                     self.temps += 1;
-                    self.expr(index);
+                    let op = match index {
+                        Index::At(index) => {
+                            self.expr(index);
+                            Op::Index
+                        }
+                        Index::Slice { start, end } => {
+                            let bounds: Vec<&Expr> = index.exprs().collect();
+                            for bound in &bounds {
+                                self.expr(bound);
+                                self.temps += 1;
+                            }
+                            self.temps -= bounds.len();
+                            Op::Slice {
+                                start: start.is_some(),
+                                end: end.is_some(),
+                            }
+                        }
+                    };
                     self.temps -= 1;
-                    self.chunk.emit(Op::Index, *pos);
+                    self.chunk.emit(op, *pos);
                 }
             }
             ExprKind::Block(block) => self.block(block, pos),
@@ -297,15 +311,23 @@ impl<'a> Compiler<'a> {
         let place = target
             .as_place()
             .expect("the checker only lets push change a variable");
-        for (_, index) in place.indexes {
-            self.expr(index);
-            self.temps += 1;
-        }
+        self.place_indexes(place.indexes);
         self.expr(value);
         let depth = place.indexes.len();
         self.temps -= depth;
         let slot = self.local(place.name).expect(RESOLVED);
         self.chunk.emit(Op::Push { slot, depth }, pos);
+    }
+
+    // Leaves the indexes on the stack, counted in `temps`.
+    fn place_indexes(&mut self, indexes: &[(Pos, Index)]) {
+        for (_, index) in indexes {
+            let Index::At(index) = index else {
+                panic!("the checker rejects assignment to a slice");
+            };
+            self.expr(index);
+            self.temps += 1;
+        }
     }
 
     fn innermost_loop(&mut self) -> &mut Loop {
@@ -652,6 +674,30 @@ mod tests {
                 Op::Int(2),
                 Op::Push { slot: 0, depth: 1 },
                 Op::Pop
+            ]
+        );
+    }
+
+    #[test]
+    fn slice_pushes_only_given_bounds() {
+        assert_eq!(
+            code(r#""abc"[1..][..2][..]"#),
+            [
+                Op::Str("abc".into()),
+                Op::Int(1),
+                Op::Slice {
+                    start: true,
+                    end: false
+                },
+                Op::Int(2),
+                Op::Slice {
+                    start: false,
+                    end: true
+                },
+                Op::Slice {
+                    start: false,
+                    end: false
+                }
             ]
         );
     }
