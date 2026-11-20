@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Added
-- Arrays: literals such as `[1, 2, 3]`, types such as `[int]` and `[[str]]`, indexing with `a[i]`, which fails at runtime outside the array, assignment to an element of a `mut` variable with `a[i] = v`, comparison with `==` and `!=`, and `len` of an array. Arrays are values: assigning to an element of one variable does not change a copy in another. `print` writes strings inside an array in quotes, as in `["a", "b"]`
+- Arrays: literals such as `[1, 2, 3]`, types such as `[int]` and `[[str]]`, indexing with `a[i]`, which fails at runtime outside the array, assignment to an element of a `mut` variable with `a[i] = v`, appending with `push(a, v)`, where `a` is a `mut` variable or an element of one, comparison with `==` and `!=`, and `len` of an array. Arrays are values: assigning to an element of one variable does not change a copy in another. `print` writes strings inside an array in quotes, as in `["a", "b"]`
 - Type annotations on `let`, such as `let n: int = 1;`, which also allow an empty array: `let a: [int] = [];`
 
 ## [0.11.0] - 2026-11-18

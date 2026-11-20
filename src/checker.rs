@@ -35,6 +35,8 @@ pub enum CheckErrorKind {
     EmptyArray,
     NotIndexable(Type),
     NoLength(Type),
+    NotArray(Type),
+    PushToValue,
 }
 
 impl CheckErrorKind {
@@ -68,6 +70,10 @@ impl fmt::Display for CheckErrorKind {
             CheckErrorKind::EmptyArray => write!(f, "cannot infer the type of an empty array"),
             CheckErrorKind::NotIndexable(ty) => write!(f, "cannot index a value of type {ty}"),
             CheckErrorKind::NoLength(ty) => write!(f, "expected str or array, found {ty}"),
+            CheckErrorKind::NotArray(ty) => write!(f, "expected array, found {ty}"),
+            CheckErrorKind::PushToValue => {
+                write!(f, "can only push to a variable or an element of one")
+            }
         }
     }
 }
@@ -241,7 +247,7 @@ fn comparable(ty: &Type) -> bool {
 
 // Built-in functions take arguments of several types, which a function type
 // cannot express, so they are not values and are checked one by one.
-const BUILTINS: [&str; 2] = ["print", "len"];
+const BUILTINS: [&str; 3] = ["print", "len", "push"];
 
 struct Checker<'a> {
     functions: &'a [(String, Type)],
@@ -332,18 +338,7 @@ impl<'a> Checker<'a> {
                     pos,
                 } => {
                     let found = self.expr(value);
-                    let ty = match self.local(name) {
-                        Some(local) => {
-                            local.assigned = true;
-                            let (mutable, ty) = (local.mutable, local.ty.clone());
-                            if !mutable {
-                                self.error(CheckErrorKind::AssignToImmutable(name.clone()), *pos);
-                            }
-                            ty
-                        }
-                        None => self.error(CheckErrorKind::UndefinedVariable(name.clone()), *pos),
-                    };
-                    let ty = self.index(ty, *pos, indexes);
+                    let ty = self.place(name, indexes, *pos);
                     self.expect(&ty, &found, value_pos(value));
                 }
                 Stmt::Expr(expr) => {
@@ -575,7 +570,26 @@ impl<'a> Checker<'a> {
         ty
     }
 
+    // The type of a variable, possibly indexed, that is about to change.
+    fn place(&mut self, name: &str, indexes: &[(Pos, Expr)], pos: Pos) -> Type {
+        let ty = match self.local(name) {
+            Some(local) => {
+                local.assigned = true;
+                let (mutable, ty) = (local.mutable, local.ty.clone());
+                if !mutable {
+                    self.error(CheckErrorKind::AssignToImmutable(name.to_string()), pos);
+                }
+                ty
+            }
+            None => self.error(CheckErrorKind::UndefinedVariable(name.to_string()), pos),
+        };
+        self.index(ty, pos, indexes)
+    }
+
     fn builtin(&mut self, name: &str, args: &[Expr], pos: Pos) -> Type {
+        if name == "push" {
+            return self.push(args, pos);
+        }
         let ret = if name == "len" { Type::Int } else { Type::Unit };
         let [arg] = args else {
             let kind = CheckErrorKind::ArgumentCount {
@@ -593,6 +607,34 @@ impl<'a> Checker<'a> {
             self.error(CheckErrorKind::NoLength(ty), value_pos(arg));
         }
         ret
+    }
+
+    fn push(&mut self, args: &[Expr], pos: Pos) -> Type {
+        let [target, value] = args else {
+            let kind = CheckErrorKind::ArgumentCount {
+                name: "push".to_string(),
+                expected: 2,
+                found: args.len(),
+            };
+            self.error(kind, pos);
+            self.args(args);
+            return Type::Unit;
+        };
+        let Some(place) = target.as_place() else {
+            self.error(CheckErrorKind::PushToValue, value_pos(target));
+            self.args(args);
+            return Type::Unit;
+        };
+        let ty = self.place(place.name, place.indexes, place.pos);
+        let found = self.expr(value);
+        match ty {
+            Type::Array(element) => self.expect(&element, &found, value_pos(value)),
+            Type::Error | Type::Never => {}
+            other => {
+                self.error(CheckErrorKind::NotArray(other), value_pos(target));
+            }
+        }
+        Type::Unit
     }
 }
 
@@ -659,6 +701,8 @@ mod tests {
             "fn f(n: int) -> [int] { [n, return [n]] }",
             "let mut a = [[1], [2]]; a[1][0] = a[0][0]; a",
             "let mut a: [int] = []; a = []; a = [1]; a",
+            "let mut a: [[int]] = [[]]; push(a, []); push(a[1], 2); a",
+            "fn push(n: int) -> int { n } push(1)",
             "let a: [[str]] = [[], [\"x\"]]; a",
             "fn f(xs: [int]) -> [int] { if len(xs) == 0 { return []; } xs } f([])",
             "fn g() -> [int] { [] }",
@@ -679,6 +723,7 @@ mod tests {
             "let x = 1; { let mut y = x; y = 2; y }",
             "fn f(g: fn()) { g() }",
             "let mut a = [1]; a[0] = 2; a",
+            "let mut a = [1]; push(a, 2); a",
         ] {
             assert_eq!(warnings(input), [] as [String; 0], "{input}");
         }
@@ -1060,6 +1105,35 @@ mod tests {
         assert_eq!(
             error("let a: [int] = [1]; a[0] + true"),
             "1:28: expected int, found bool"
+        );
+    }
+
+    #[test]
+    fn push_errors() {
+        assert_eq!(
+            error("let a = [1]; push(a, 2); a"),
+            "1:19: cannot assign to immutable variable: a"
+        );
+        assert_eq!(
+            error("let a = [[1]]; push(a[0], 2); a"),
+            "1:21: cannot assign to immutable variable: a"
+        );
+        assert_eq!(
+            error("let mut a = [1]; push(a, true); a"),
+            "1:26: expected int, found bool"
+        );
+        assert_eq!(
+            error("let mut n = 1; push(n, 2); n"),
+            "1:21: expected array, found int"
+        );
+        assert_eq!(
+            error("push([1], 2);"),
+            "1:6: can only push to a variable or an element of one"
+        );
+        assert_eq!(error("push(b, 1);"), "1:6: undefined variable: b");
+        assert_eq!(
+            error("let mut a = [1]; push(a); a"),
+            "1:18: push expects 2 arguments, got 1"
         );
     }
 }

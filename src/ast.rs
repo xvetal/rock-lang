@@ -87,6 +87,30 @@ impl ExprKind {
     }
 }
 
+// A variable, possibly indexed, which can be changed in place.
+pub struct Place<'a> {
+    pub name: &'a str,
+    pub pos: Pos,
+    pub indexes: &'a [(Pos, Expr)],
+}
+
+impl Expr {
+    pub fn as_place(&self) -> Option<Place<'_>> {
+        let (var, indexes) = match &self.kind {
+            ExprKind::Index { target, indexes } => (&**target, &indexes[..]),
+            _ => (self, &[][..]),
+        };
+        match &var.kind {
+            ExprKind::Var(name) => Some(Place {
+                name,
+                pos: var.pos,
+                indexes,
+            }),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     pub stmts: Vec<Stmt>,

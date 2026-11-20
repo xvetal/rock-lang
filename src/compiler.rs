@@ -275,6 +275,9 @@ impl<'a> Compiler<'a> {
     }
 
     fn builtin(&mut self, name: &str, args: &[Expr], pos: Pos) {
+        if name == "push" {
+            return self.push(args, pos);
+        }
         let [value] = args else {
             panic!("the checker gives built-in functions exactly one argument");
         };
@@ -285,6 +288,24 @@ impl<'a> Compiler<'a> {
         };
         self.expr(value);
         self.chunk.emit(op, pos);
+    }
+
+    fn push(&mut self, args: &[Expr], pos: Pos) {
+        let [target, value] = args else {
+            panic!("the checker gives push two arguments");
+        };
+        let place = target
+            .as_place()
+            .expect("the checker only lets push change a variable");
+        for (_, index) in place.indexes {
+            self.expr(index);
+            self.temps += 1;
+        }
+        self.expr(value);
+        let depth = place.indexes.len();
+        self.temps -= depth;
+        let slot = self.local(place.name).expect(RESOLVED);
+        self.chunk.emit(Op::Push { slot, depth }, pos);
     }
 
     fn innermost_loop(&mut self) -> &mut Loop {
@@ -614,6 +635,23 @@ mod tests {
                 Op::Int(0),
                 Op::Int(0),
                 Op::SetIndex { slot: 0, depth: 2 }
+            ]
+        );
+    }
+
+    #[test]
+    fn push_compiles_to_instruction() {
+        assert_eq!(
+            code("let mut a = [[1]]; push(a[0], 2);"),
+            [
+                Op::Int(1),
+                Op::Array(1),
+                Op::Array(1),
+                Op::DefineLocal,
+                Op::Int(0),
+                Op::Int(2),
+                Op::Push { slot: 0, depth: 1 },
+                Op::Pop
             ]
         );
     }

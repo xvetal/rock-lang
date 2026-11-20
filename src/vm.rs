@@ -155,26 +155,42 @@ impl<W: Write> Vm<W> {
                 Op::SetIndex { slot, depth } => {
                     let indexes = self.stack.split_off(self.stack.len() - depth);
                     let value = self.pop();
-                    let mut place = &mut self.locals[frame.locals + slot];
-                    for index in indexes {
-                        let index = index.as_int();
-                        let Value::Array(items) = place else {
-                            panic!("the checker only lets arrays be indexed");
-                        };
-                        // Copies the array if another value still shares it,
-                        // so the write is not seen through that value.
-                        let items = Rc::make_mut(items);
-                        let len = items.len();
-                        place = usize::try_from(index)
-                            .ok()
-                            .and_then(|i| items.get_mut(i))
-                            .ok_or_else(|| at(RuntimeErrorKind::IndexOutOfBounds { index, len }))?;
-                    }
-                    *place = value;
+                    *self.place(frame.locals + slot, indexes).map_err(at)? = value;
+                }
+                Op::Push { slot, depth } => {
+                    let value = self.pop();
+                    let indexes = self.stack.split_off(self.stack.len() - depth);
+                    let Value::Array(items) =
+                        self.place(frame.locals + slot, indexes).map_err(at)?
+                    else {
+                        panic!("the checker only lets push change an array");
+                    };
+                    Rc::make_mut(items).push(value);
+                    self.stack.push(Value::Unit);
                 }
             }
         }
         Ok(self.stack.pop().unwrap_or(Value::Unit))
+    }
+
+    // Follows `indexes` from the local in `slot`. Copies every array on the
+    // way that another value still shares, so a change through the result is
+    // not seen through that value.
+    fn place(&mut self, slot: usize, indexes: Vec<Value>) -> Result<&mut Value, RuntimeErrorKind> {
+        let mut place = &mut self.locals[slot];
+        for index in indexes {
+            let index = index.as_int();
+            let Value::Array(items) = place else {
+                panic!("the checker only lets arrays be indexed");
+            };
+            let items = Rc::make_mut(items);
+            let len = items.len();
+            place = usize::try_from(index)
+                .ok()
+                .and_then(|i| items.get_mut(i))
+                .ok_or(RuntimeErrorKind::IndexOutOfBounds { index, len })?;
+        }
+        Ok(place)
     }
 
     fn pop(&mut self) -> Value {
@@ -396,6 +412,10 @@ mod tests {
         assert_eq!(
             vm("let mut a = [[0]]; while true { a[0][break] = 1; } a[0][0]"),
             Ok(Value::Int(0))
+        );
+        assert_eq!(
+            vm("let mut a = [[0]]; while true { push(a[0], break); };"),
+            Ok(Value::Unit)
         );
         assert_eq!(
             vm("let mut i = 0; while i < 3 { i = i + 1; 2 * { let a = i; continue; }; };"),
@@ -651,6 +671,18 @@ mod tests {
     }
 
     #[test]
+    fn push() {
+        assert_eq!(
+            output("let mut a: [[int]] = []; push(a, []); push(a[0], 1); push(a, [2]); print(a);"),
+            "[[1], [2]]\n"
+        );
+        assert_eq!(
+            vm("let mut a = [1]; let b = a; push(a, 2); len(a) * 10 + len(b)"),
+            Ok(Value::Int(21))
+        );
+    }
+
+    #[test]
     fn functions_shadow_print() {
         assert_eq!(output("fn print(x: int) -> int { x } print(1);"), "");
     }
@@ -829,6 +861,14 @@ mod tests {
         assert_eq!(
             error("let mut a = [[1]];\na[0][0 - 1] = 2;"),
             "2:1: index -1 out of bounds for length 1"
+        );
+    }
+
+    #[test]
+    fn push_out_of_bounds() {
+        assert_eq!(
+            error("let mut a = [[1]];\npush(a[1], 2);"),
+            "2:1: index 1 out of bounds for length 1"
         );
     }
 }
