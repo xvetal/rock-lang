@@ -132,6 +132,13 @@ impl<W: Write> Vm<W> {
                     };
                     self.stack.push(Value::Int(len as i64));
                 }
+                Op::Bytes => {
+                    let Value::Str(s) = self.pop() else {
+                        panic!("the checker only lets bytes take a string");
+                    };
+                    let bytes = s.bytes().map(|b| Value::Int(i64::from(b))).collect();
+                    self.stack.push(Value::Array(Rc::new(bytes)));
+                }
                 Op::Array(count) => {
                     let items = self.stack.split_off(self.stack.len() - count);
                     self.stack.push(Value::Array(Rc::new(items)));
@@ -638,6 +645,17 @@ mod tests {
         assert_eq!(vm(r#"len("Rock")"#), Ok(Value::Int(4)));
         assert_eq!(vm(r#"len("a\n")"#), Ok(Value::Int(2)));
         assert_eq!(vm(r#"len("привет")"#), Ok(Value::Int(12)));
+    }
+
+    #[test]
+    fn bytes() {
+        assert_eq!(output(r#"print(bytes("Rock"));"#), "[82, 111, 99, 107]\n");
+        assert_eq!(output(r#"print(bytes("ж\n"));"#), "[208, 182, 10]\n");
+        assert_eq!(output(r#"print(bytes(""));"#), "[]\n");
+        assert_eq!(
+            vm(r#"len(bytes("привет")) == len("привет")"#),
+            Ok(Value::Bool(true))
+        );
     }
 
     #[test]

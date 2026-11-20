@@ -4,6 +4,7 @@
 
 ### Added
 - Slices: `s[a..b]` returns a new string or array with the bytes or elements from `a` up to, not including, `b`; either bound can be left out, as in `s[a..]` and `s[..b]`. A bound outside the value, a start after the end, or a string slice that cuts a character in two, as in `"привет"[1..]`, fails at runtime. A slice is a copy, so it cannot be assigned to or pushed to
+- `bytes(s)` returns the bytes of a string as `[int]`, so `bytes("ж")` is `[208, 182]`
 
 ## [0.12.0] - 2026-11-20
 

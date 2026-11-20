@@ -3,9 +3,6 @@
 ## Parser
 - [ ] Switch to a Pratt parser when more precedence levels appear
 
-## Strings
-- [ ] `bytes(s)`, which returns the bytes of a string as `[int]`
-
 ## Ranges
 - [ ] Ranges as values, such as `let r = 0..n;`, together with `for i in 0..n`
 

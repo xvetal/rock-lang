@@ -24,6 +24,7 @@ pub enum Op {
     Return,
     Print,
     Len,
+    Bytes,
     Array(usize),
     Index,
     // Each flag tells whether that bound is on the stack.

@@ -251,7 +251,7 @@ fn comparable(ty: &Type) -> bool {
 
 // Built-in functions take arguments of several types, which a function type
 // cannot express, so they are not values and are checked one by one.
-const BUILTINS: [&str; 3] = ["print", "len", "push"];
+const BUILTINS: [&str; 4] = ["print", "len", "push", "bytes"];
 
 struct Checker<'a> {
     functions: &'a [(String, Type)],
@@ -607,7 +607,11 @@ impl<'a> Checker<'a> {
         if name == "push" {
             return self.push(args, pos);
         }
-        let ret = if name == "len" { Type::Int } else { Type::Unit };
+        let ret = match name {
+            "len" => Type::Int,
+            "bytes" => Type::Array(Box::new(Type::Int)),
+            _ => Type::Unit,
+        };
         let [arg] = args else {
             let kind = CheckErrorKind::ArgumentCount {
                 name: name.to_string(),
@@ -619,9 +623,15 @@ impl<'a> Checker<'a> {
             return ret;
         };
         let ty = self.expr(arg);
-        let sized = matches!(ty, Type::Str | Type::Array(_) | Type::Error | Type::Never);
-        if name == "len" && !sized {
-            self.error(CheckErrorKind::NoLength(ty), value_pos(arg));
+        match name {
+            "len" => {
+                let sized = matches!(ty, Type::Str | Type::Array(_) | Type::Error | Type::Never);
+                if !sized {
+                    self.error(CheckErrorKind::NoLength(ty), value_pos(arg));
+                }
+            }
+            "bytes" => self.expect(&Type::Str, &ty, value_pos(arg)),
+            _ => {}
         }
         ret
     }
@@ -730,6 +740,8 @@ mod tests {
             "let a = [[1, 2], [3]]; let b: [[int]] = a[1..]; a[..1][0][1..][0] + len(b)",
             "let mut a = [[1, 2]]; a[0] = a[0][..1]; push(a, a[0][1..]); a",
             "[][0..0] == [1]",
+            r#"bytes("ab")[1] - bytes("a")[0] + len(bytes(""))"#,
+            "fn bytes(n: int) -> int { n } bytes(1)",
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
         }
@@ -1190,6 +1202,21 @@ mod tests {
                 "1:16: cannot assign to immutable variable: s",
                 "1:17: cannot assign to a slice"
             ]
+        );
+    }
+
+    #[test]
+    fn bytes_errors() {
+        assert_eq!(error("bytes(1)"), "1:7: expected str, found int");
+        assert_eq!(error(r#"bytes(["a"])"#), "1:7: expected str, found [str]");
+        assert_eq!(
+            error(r#"bytes("a", "b")"#),
+            "1:1: bytes expects 1 argument, got 2"
+        );
+        assert_eq!(error("let f = bytes;"), "1:9: undefined variable: bytes");
+        assert_eq!(
+            error(r#"let b: [str] = bytes("a");"#),
+            "1:16: expected [str], found [int]"
         );
     }
 }

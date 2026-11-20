@@ -298,6 +298,7 @@ impl<'a> Compiler<'a> {
         let op = match name {
             "print" => Op::Print,
             "len" => Op::Len,
+            "bytes" => Op::Bytes,
             _ => panic!("the checker rejects undefined function {name}"),
         };
         self.expr(value);
@@ -705,6 +706,11 @@ mod tests {
     #[test]
     fn len_compiles_to_instruction() {
         assert_eq!(code(r#"len("a")"#), [Op::Str("a".into()), Op::Len]);
+    }
+
+    #[test]
+    fn bytes_compiles_to_instruction() {
+        assert_eq!(code(r#"bytes("a")"#), [Op::Str("a".into()), Op::Bytes]);
     }
 
     #[test]
