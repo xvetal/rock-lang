@@ -425,7 +425,13 @@ impl Parser {
     }
 
     fn postfix(&mut self) -> Result<Expr, ParseError> {
+        // `if c { }` followed by `[1]` on the next line is two expressions, as
+        // in a statement. Parentheses allow indexing: `(if c { a } else { b })[0]`.
+        let block_like = matches!(self.peek(), Token::LBrace | Token::If | Token::While);
         let target = self.primary()?;
+        if block_like {
+            return Ok(target);
+        }
         let mut indexes = Vec::new();
         while self.peek() == &Token::LBracket {
             let pos = self.peek_pos();
@@ -1073,6 +1079,28 @@ mod tests {
         assert_eq!(
             parse("[1, 2][0]"),
             Ok(index(array(vec![int(1), int(2)]), vec![int(0)]))
+        );
+    }
+
+    #[test]
+    fn block_like_expressions_are_not_indexed() {
+        assert_eq!(
+            parse_program("if x { }\n[1]"),
+            Ok(Program {
+                stmts: vec![Stmt::Expr(if_expr(var("x"), block(vec![], None), None))],
+                expr: Some(array(vec![int(1)]))
+            })
+        );
+        assert_eq!(
+            parse("(if x { [1] } else { [2] })[0]"),
+            Ok(index(
+                if_expr(
+                    var("x"),
+                    block(vec![], Some(array(vec![int(1)]))),
+                    Some(block(vec![], Some(array(vec![int(2)]))))
+                ),
+                vec![int(0)]
+            ))
         );
     }
 
