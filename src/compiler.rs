@@ -90,10 +90,25 @@ impl<'a> Compiler<'a> {
                     self.chunk.emit(Op::DefineLocal, value.pos);
                     self.locals.push(name.clone());
                 }
-                Stmt::Assign { name, value, pos } => {
+                Stmt::Assign {
+                    name,
+                    indexes,
+                    value,
+                    pos,
+                } => {
                     self.expr(value);
+                    self.temps += 1;
+                    for (_, index) in indexes {
+                        self.expr(index);
+                        self.temps += 1;
+                    }
+                    self.temps -= indexes.len() + 1;
                     let slot = self.local(name).expect(RESOLVED);
-                    self.chunk.emit(Op::SetLocal(slot), *pos);
+                    let op = match indexes.len() {
+                        0 => Op::SetLocal(slot),
+                        depth => Op::SetIndex { slot, depth },
+                    };
+                    self.chunk.emit(op, *pos);
                 }
                 Stmt::Expr(expr) => {
                     self.expr(expr);
@@ -583,6 +598,23 @@ mod tests {
         assert_eq!(
             code("[1, 2][0]"),
             [Op::Int(1), Op::Int(2), Op::Array(2), Op::Int(0), Op::Index]
+        );
+    }
+
+    #[test]
+    fn index_assignment() {
+        assert_eq!(
+            code("let mut a = [[1]]; a[0][0] = 2;"),
+            [
+                Op::Int(1),
+                Op::Array(1),
+                Op::Array(1),
+                Op::DefineLocal,
+                Op::Int(2),
+                Op::Int(0),
+                Op::Int(0),
+                Op::SetIndex { slot: 0, depth: 2 }
+            ]
         );
     }
 

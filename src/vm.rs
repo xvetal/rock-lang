@@ -152,6 +152,26 @@ impl<W: Write> Vm<W> {
                         })?;
                     self.stack.push(item.clone());
                 }
+                Op::SetIndex { slot, depth } => {
+                    let indexes = self.stack.split_off(self.stack.len() - depth);
+                    let value = self.pop();
+                    let mut place = &mut self.locals[frame.locals + slot];
+                    for index in indexes {
+                        let index = index.as_int();
+                        let Value::Array(items) = place else {
+                            panic!("the checker only lets arrays be indexed");
+                        };
+                        // Copies the array if another value still shares it,
+                        // so the write is not seen through that value.
+                        let items = Rc::make_mut(items);
+                        let len = items.len();
+                        place = usize::try_from(index)
+                            .ok()
+                            .and_then(|i| items.get_mut(i))
+                            .ok_or_else(|| at(RuntimeErrorKind::IndexOutOfBounds { index, len }))?;
+                    }
+                    *place = value;
+                }
             }
         }
         Ok(self.stack.pop().unwrap_or(Value::Unit))
@@ -373,6 +393,10 @@ mod tests {
         assert_eq!(vm("while true { 1 + break; };"), Ok(Value::Unit));
         assert_eq!(vm("while true { [1, 2, break]; };"), Ok(Value::Unit));
         assert_eq!(vm("while true { [1][break]; };"), Ok(Value::Unit));
+        assert_eq!(
+            vm("let mut a = [[0]]; while true { a[0][break] = 1; } a[0][0]"),
+            Ok(Value::Int(0))
+        );
         assert_eq!(
             vm("let mut i = 0; while i < 3 { i = i + 1; 2 * { let a = i; continue; }; };"),
             Ok(Value::Unit)
@@ -603,6 +627,30 @@ mod tests {
     }
 
     #[test]
+    fn index_assignment() {
+        assert_eq!(
+            output("let mut a = [[1, 2], [3]]; a[0][1] = 5; a[1] = [6, 7]; print(a);"),
+            "[[1, 5], [6, 7]]\n"
+        );
+    }
+
+    #[test]
+    fn index_assignment_leaves_copies_unchanged() {
+        assert_eq!(
+            vm("let mut a = [1]; let b = a; a[0] = 2; b[0] * 10 + a[0]"),
+            Ok(Value::Int(12))
+        );
+        assert_eq!(
+            vm("let mut a = [[0]]; let inner = a[0]; a[0][0] = 1; inner[0] * 10 + a[0][0]"),
+            Ok(Value::Int(1))
+        );
+        assert_eq!(
+            vm("fn f(mut xs: [int]) -> int { xs[0] = 9; xs[0] } let a = [1]; f(a) * 10 + a[0]"),
+            Ok(Value::Int(91))
+        );
+    }
+
+    #[test]
     fn functions_shadow_print() {
         assert_eq!(output("fn print(x: int) -> int { x } print(1);"), "");
     }
@@ -769,6 +817,18 @@ mod tests {
         assert_eq!(
             error("let a = [1];\na[0 - 1]"),
             "2:2: index -1 out of bounds for length 1"
+        );
+    }
+
+    #[test]
+    fn index_assignment_out_of_bounds() {
+        assert_eq!(
+            error("let mut a = [1];\na[1] = 2;"),
+            "2:1: index 1 out of bounds for length 1"
+        );
+        assert_eq!(
+            error("let mut a = [[1]];\na[0][0 - 1] = 2;"),
+            "2:1: index -1 out of bounds for length 1"
         );
     }
 }

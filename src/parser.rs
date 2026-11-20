@@ -122,14 +122,11 @@ impl Parser {
                 Token::Let => self.let_stmt(),
                 Token::Fn if top_level => self.fn_decl(),
                 Token::Fn => Err(ParseErrorKind::NestedFn.at(pos)),
-                Token::Ident(name) if self.peek_next() == &Token::Eq => {
-                    let name = name.clone();
-                    self.assign_stmt(name)
-                }
                 _ => match self.expr() {
                     Ok(value) => {
                         let pos = self.peek_pos();
                         match self.peek() {
+                            Token::Eq => self.assign_stmt(value),
                             Token::Semicolon => {
                                 self.advance();
                                 Ok(Stmt::Expr(value))
@@ -296,13 +293,26 @@ impl Parser {
         Ok(Type::Fn { params, ret })
     }
 
-    fn assign_stmt(&mut self, name: String) -> Result<Stmt, ParseError> {
-        let pos = self.peek_pos();
+    // Only a variable, possibly indexed, can be assigned to. A write into
+    // any other value, such as `f()[0]`, would be lost with that value.
+    fn assign_stmt(&mut self, target: Expr) -> Result<Stmt, ParseError> {
+        let eq_pos = self.peek_pos();
         self.advance();
-        self.advance();
+        let (var, indexes) = match target.kind {
+            ExprKind::Index { target, indexes } => (*target, indexes),
+            _ => (target, Vec::new()),
+        };
+        let ExprKind::Var(name) = var.kind else {
+            return Err(ParseErrorKind::Unexpected(Token::Eq).at(eq_pos));
+        };
         let value = self.expr()?;
         self.expect(Token::Semicolon, "';'")?;
-        Ok(Stmt::Assign { name, value, pos })
+        Ok(Stmt::Assign {
+            name,
+            indexes,
+            value,
+            pos: var.pos,
+        })
     }
 
     fn expr(&mut self) -> Result<Expr, ParseError> {
@@ -577,11 +587,6 @@ impl Parser {
         &self.tokens[self.pos].token
     }
 
-    fn peek_next(&self) -> &Token {
-        let next = (self.pos + 1).min(self.tokens.len() - 1);
-        &self.tokens[next].token
-    }
-
     fn peek_pos(&self) -> Pos {
         self.tokens[self.pos].pos
     }
@@ -731,8 +736,21 @@ mod tests {
     fn strip_stmt(stmt: &mut Stmt) {
         match stmt {
             Stmt::Expr(value) => strip(value),
-            Stmt::Let { value, pos, .. } | Stmt::Assign { value, pos, .. } => {
+            Stmt::Let { value, pos, .. } => {
                 *pos = NO_POS;
+                strip(value);
+            }
+            Stmt::Assign {
+                indexes,
+                value,
+                pos,
+                ..
+            } => {
+                *pos = NO_POS;
+                for (pos, index) in indexes {
+                    *pos = NO_POS;
+                    strip(index);
+                }
                 strip(value);
             }
             Stmt::Fn(decl) => {
@@ -1293,7 +1311,24 @@ mod tests {
             Ok(Program {
                 stmts: vec![Stmt::Assign {
                     name: "x".to_string(),
+                    indexes: vec![],
                     value: bin(Add, var("x"), int(1)),
+                    pos: NO_POS
+                }],
+                expr: None
+            })
+        );
+    }
+
+    #[test]
+    fn index_assignment() {
+        assert_eq!(
+            parse_program("a[0][i] = 1;"),
+            Ok(Program {
+                stmts: vec![Stmt::Assign {
+                    name: "a".to_string(),
+                    indexes: vec![(NO_POS, int(0)), (NO_POS, var("i"))],
+                    value: int(1),
                     pos: NO_POS
                 }],
                 expr: None
@@ -1938,6 +1973,18 @@ mod tests {
         assert_eq!(
             parse_program("1 = 2;"),
             Err(at(ParseErrorKind::Unexpected(Token::Eq), 1, 3))
+        );
+        assert_eq!(
+            parse_program("[1, 2][0] = 3;"),
+            Err(at(ParseErrorKind::Unexpected(Token::Eq), 1, 11))
+        );
+        assert_eq!(
+            parse_program("f()[0] = 1;"),
+            Err(at(ParseErrorKind::Unexpected(Token::Eq), 1, 8))
+        );
+        assert_eq!(
+            parse_program("{ 1 = 2; }"),
+            Err(at(ParseErrorKind::Unexpected(Token::Eq), 1, 5))
         );
     }
 

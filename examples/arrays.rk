@@ -13,3 +13,13 @@ print(grid);
 print(sum(grid[1]));
 print(grid[0] == [1, 2, 3]);
 print(["a", "b, c"]);
+
+let zeros = [0, 0, 0, 0];
+let mut squares = zeros;
+let mut i = 0;
+while i < len(squares) {
+    squares[i] = i * i;
+    i = i + 1;
+}
+print(squares);
+print(zeros);

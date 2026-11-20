@@ -26,6 +26,7 @@ pub enum Op {
     Len,
     Array(usize),
     Index,
+    SetIndex { slot: usize, depth: usize },
 }
 
 #[derive(Debug, Default, PartialEq)]

@@ -304,17 +304,25 @@ impl<'a> Checker<'a> {
                     let ty = self.expr(value);
                     self.locals.push(Local::new(name, ty, *mutable, *pos));
                 }
-                Stmt::Assign { name, value, pos } => {
+                Stmt::Assign {
+                    name,
+                    indexes,
+                    value,
+                    pos,
+                } => {
                     let found = self.expr(value);
-                    let Some(local) = self.local(name) else {
-                        self.error(CheckErrorKind::UndefinedVariable(name.clone()), *pos);
-                        continue;
+                    let ty = match self.local(name) {
+                        Some(local) => {
+                            local.assigned = true;
+                            let (mutable, ty) = (local.mutable, local.ty.clone());
+                            if !mutable {
+                                self.error(CheckErrorKind::AssignToImmutable(name.clone()), *pos);
+                            }
+                            ty
+                        }
+                        None => self.error(CheckErrorKind::UndefinedVariable(name.clone()), *pos),
                     };
-                    local.assigned = true;
-                    let (mutable, ty) = (local.mutable, local.ty.clone());
-                    if !mutable {
-                        self.error(CheckErrorKind::AssignToImmutable(name.clone()), *pos);
-                    }
+                    let ty = self.index(ty, *pos, indexes);
                     self.expect(&ty, &found, value_pos(value));
                 }
                 Stmt::Expr(expr) => {
@@ -415,19 +423,8 @@ impl<'a> Checker<'a> {
                 Type::Array(Box::new(ty))
             }
             ExprKind::Index { target, indexes } => {
-                let mut ty = self.expr(target);
-                let mut ty_pos = value_pos(target);
-                for (pos, index) in indexes {
-                    ty = match ty {
-                        Type::Array(element) => *element,
-                        Type::Error | Type::Never => ty,
-                        other => self.error(CheckErrorKind::NotIndexable(other), ty_pos),
-                    };
-                    let found = self.expr(index);
-                    self.expect(&Type::Int, &found, value_pos(index));
-                    ty_pos = *pos;
-                }
-                ty
+                let ty = self.expr(target);
+                self.index(ty, value_pos(target), indexes)
             }
             ExprKind::Block(block) => self.block(block),
             ExprKind::If {
@@ -541,6 +538,22 @@ impl<'a> Checker<'a> {
         }
     }
 
+    // `pos` locates the value of type `ty`, so an error can point at the
+    // part of `a[i][j]` that is not an array.
+    fn index(&mut self, mut ty: Type, mut pos: Pos, indexes: &[(Pos, Expr)]) -> Type {
+        for (bracket, index) in indexes {
+            ty = match ty {
+                Type::Array(element) => *element,
+                Type::Error | Type::Never => ty,
+                other => self.error(CheckErrorKind::NotIndexable(other), pos),
+            };
+            let found = self.expr(index);
+            self.expect(&Type::Int, &found, value_pos(index));
+            pos = *bracket;
+        }
+        ty
+    }
+
     fn builtin(&mut self, name: &str, args: &[Expr], pos: Pos) -> Type {
         let ret = if name == "len" { Type::Int } else { Type::Unit };
         let [arg] = args else {
@@ -623,6 +636,8 @@ mod tests {
             "fn f(xs: [str]) -> str { xs[0] } f([\"a\"]) == \"a\"",
             "[1] == [2] && [[true]] != [[false]]",
             "fn f(n: int) -> [int] { [n, return [n]] }",
+            "let mut a = [[1], [2]]; a[1][0] = a[0][0]; a",
+            "fn f(mut xs: [int]) -> [int] { xs[0] = 1; xs }",
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
         }
@@ -636,6 +651,7 @@ mod tests {
             "fn f(mut n: int) -> int { n = n + 1; n }",
             "let x = 1; { let mut y = x; y = 2; y }",
             "fn f(g: fn()) { g() }",
+            "let mut a = [1]; a[0] = 2; a",
         ] {
             assert_eq!(warnings(input), [] as [String; 0], "{input}");
         }
@@ -974,5 +990,26 @@ mod tests {
             error("let a = [y]; a[0] + 1"),
             "1:10: undefined variable: y"
         );
+    }
+
+    #[test]
+    fn index_assignment_errors() {
+        assert_eq!(
+            error("let a = [1]; a[0] = 2; a"),
+            "1:14: cannot assign to immutable variable: a"
+        );
+        assert_eq!(
+            error("let mut a = [1]; a[0] = true; a"),
+            "1:25: expected int, found bool"
+        );
+        assert_eq!(
+            error("let mut a = [1]; a[true] = 2; a"),
+            "1:20: expected int, found bool"
+        );
+        assert_eq!(
+            error("let mut x = 1; x[0] = 2; x"),
+            "1:16: cannot index a value of type int"
+        );
+        assert_eq!(error("b[0] = 1;"), "1:1: undefined variable: b");
     }
 }

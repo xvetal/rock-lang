@@ -172,6 +172,7 @@ pub enum Stmt {
     },
     Assign {
         name: String,
+        indexes: Vec<(Pos, Expr)>,
         value: Expr,
         pos: Pos,
     },
