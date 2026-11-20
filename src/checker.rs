@@ -222,6 +222,15 @@ fn fits(found: &Type, expected: &Type) -> bool {
     }
 }
 
+// `[]` has the type `[!]`, which fits any array type, as `!` fits any type.
+// A variable needs the element type, so it cannot take `[!]` from its value.
+fn has_empty_array(ty: &Type) -> bool {
+    match ty {
+        Type::Array(element) => **element == Type::Never || has_empty_array(element),
+        _ => false,
+    }
+}
+
 fn comparable(ty: &Type) -> bool {
     match ty {
         Type::Fn { .. } => false,
@@ -271,7 +280,8 @@ impl<'a> Checker<'a> {
     }
 
     fn join(&mut self, first: Type, second: Type, pos: Pos) -> Type {
-        if matches!(first, Type::Never | Type::Error) {
+        let arrays = matches!((&first, &second), (Type::Array(_), Type::Array(_)));
+        if matches!(first, Type::Never | Type::Error) || arrays && fits(&first, &second) {
             return second;
         }
         self.expect(&first, &second, pos);
@@ -298,10 +308,21 @@ impl<'a> Checker<'a> {
                 Stmt::Let {
                     name,
                     mutable,
+                    ty,
                     value,
                     pos,
                 } => {
-                    let ty = self.expr(value);
+                    let found = self.expr(value);
+                    let ty = match ty {
+                        Some(ty) => {
+                            self.expect(ty, &found, value_pos(value));
+                            ty.clone()
+                        }
+                        None if has_empty_array(&found) => {
+                            self.error(CheckErrorKind::EmptyArray, value_pos(value))
+                        }
+                        None => found,
+                    };
                     self.locals.push(Local::new(name, ty, *mutable, *pos));
                 }
                 Stmt::Assign {
@@ -413,7 +434,7 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Array(items) => {
                 let Some((first, rest)) = items.split_first() else {
-                    return self.error(CheckErrorKind::EmptyArray, pos);
+                    return Type::Array(Box::new(Type::Never));
                 };
                 let mut ty = self.expr(first);
                 for item in rest {
@@ -637,6 +658,12 @@ mod tests {
             "[1] == [2] && [[true]] != [[false]]",
             "fn f(n: int) -> [int] { [n, return [n]] }",
             "let mut a = [[1], [2]]; a[1][0] = a[0][0]; a",
+            "let mut a: [int] = []; a = []; a = [1]; a",
+            "let a: [[str]] = [[], [\"x\"]]; a",
+            "fn f(xs: [int]) -> [int] { if len(xs) == 0 { return []; } xs } f([])",
+            "fn g() -> [int] { [] }",
+            "let a = if true { [] } else { [1] }; a[0] + 1",
+            "let a = [[1], []]; let n: int = len(a); a == [] || n == 2",
             "fn f(mut xs: [int]) -> [int] { xs[0] = 1; xs }",
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
@@ -973,7 +1000,14 @@ mod tests {
     #[test]
     fn array_errors() {
         assert_eq!(error("[1, true]"), "1:5: expected int, found bool");
-        assert_eq!(error("[]"), "1:1: cannot infer the type of an empty array");
+        assert_eq!(
+            error("let a = [];"),
+            "1:9: cannot infer the type of an empty array"
+        );
+        assert_eq!(
+            error("let mut a = [[]]; a[0] = [1];"),
+            "1:13: cannot infer the type of an empty array"
+        );
         assert_eq!(error("1[0]"), "1:1: cannot index a value of type int");
         assert_eq!(error("[1][0][0]"), "1:4: cannot index a value of type int");
         assert_eq!(error("\"ab\"[0]"), "1:1: cannot index a value of type str");
@@ -1011,5 +1045,21 @@ mod tests {
             "1:16: cannot index a value of type int"
         );
         assert_eq!(error("b[0] = 1;"), "1:1: undefined variable: b");
+    }
+
+    #[test]
+    fn let_type_errors() {
+        assert_eq!(
+            error("let a: int = true; a"),
+            "1:14: expected int, found bool"
+        );
+        assert_eq!(
+            error("let a: [int] = [true]; a"),
+            "1:16: expected [int], found [bool]"
+        );
+        assert_eq!(
+            error("let a: [int] = [1]; a[0] + true"),
+            "1:28: expected int, found bool"
+        );
     }
 }

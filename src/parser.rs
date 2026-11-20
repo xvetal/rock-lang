@@ -203,12 +203,19 @@ impl Parser {
         let mutable = self.mutable();
         let pos = self.peek_pos();
         let name = self.ident("variable name after 'let'")?;
+        let ty = if self.peek() == &Token::Colon {
+            self.advance();
+            Some(self.ty()?)
+        } else {
+            None
+        };
         self.expect(Token::Eq, "'='")?;
         let value = self.expr()?;
         self.expect(Token::Semicolon, "';'")?;
         Ok(Stmt::Let {
             name,
             mutable,
+            ty,
             value,
             pos,
         })
@@ -801,6 +808,7 @@ mod tests {
         Stmt::Let {
             name: name.to_string(),
             mutable: false,
+            ty: None,
             value,
             pos: NO_POS,
         }
@@ -1689,7 +1697,25 @@ mod tests {
                 stmts: vec![Stmt::Let {
                     name: "x".to_string(),
                     mutable: true,
+                    ty: None,
                     value: int(1),
+                    pos: NO_POS
+                }],
+                expr: None
+            })
+        );
+    }
+
+    #[test]
+    fn let_with_type() {
+        assert_eq!(
+            parse_program("let a: [int] = [];"),
+            Ok(Program {
+                stmts: vec![Stmt::Let {
+                    name: "a".to_string(),
+                    mutable: false,
+                    ty: Some(Type::Array(Box::new(Type::Int))),
+                    value: array(vec![]),
                     pos: NO_POS
                 }],
                 expr: None
@@ -2284,6 +2310,18 @@ mod tests {
                 "1:9: expected expression, found ')'",
                 "2:9: expected expression, found ';'"
             ]
+        );
+    }
+
+    #[test]
+    fn let_with_bad_type() {
+        assert_eq!(
+            parse_program("let a: = 1;"),
+            Err(at(expected("type", Token::Eq), 1, 8))
+        );
+        assert_eq!(
+            parse_program("let a: int 1;"),
+            Err(at(expected("'='", Token::Int(1)), 1, 12))
         );
     }
 }
