@@ -1,6 +1,8 @@
 use std::fmt;
 
-use crate::ast::{BinaryOp, Block, Expr, ExprKind, FnDecl, Index, Program, Stmt, Type, UnaryOp};
+use crate::ast::{
+    BinaryOp, Block, Expr, ExprKind, FnDecl, Index, Iterable, Program, Stmt, Type, UnaryOp,
+};
 use crate::lexer::Pos;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +41,7 @@ pub enum CheckErrorKind {
     NoLength(Type),
     NotArray(Type),
     PushToValue,
+    NotIterable(Type),
 }
 
 impl CheckErrorKind {
@@ -77,6 +80,9 @@ impl fmt::Display for CheckErrorKind {
             CheckErrorKind::NotArray(ty) => write!(f, "expected array, found {ty}"),
             CheckErrorKind::PushToValue => {
                 write!(f, "can only push to a variable or an element of one")
+            }
+            CheckErrorKind::NotIterable(ty) => {
+                write!(f, "cannot iterate over a value of type {ty}")
             }
         }
     }
@@ -483,18 +489,13 @@ impl<'a> Checker<'a> {
             ExprKind::For {
                 var,
                 var_pos,
-                start,
-                end,
+                iter,
                 body,
             } => {
-                for bound in [start, end] {
-                    let found = self.expr(bound);
-                    self.expect(&Type::Int, &found, value_pos(bound));
-                }
+                let ty = self.iterable(iter);
                 let diverges = self.diverges;
                 let outer = self.locals.len();
-                self.locals
-                    .push(Local::new(var, Type::Int, false, *var_pos));
+                self.locals.push(Local::new(var, ty, false, *var_pos));
                 let body_ty = self.block(body);
                 self.expect(&Type::Unit, &body_ty, block_value_pos(body, pos));
                 self.end_scope(outer);
@@ -622,6 +623,30 @@ impl<'a> Checker<'a> {
             self.error(CheckErrorKind::AssignToSlice, *bracket);
         }
         self.index(ty, pos, indexes)
+    }
+
+    // The type of the loop variable.
+    fn iterable(&mut self, iter: &Iterable) -> Type {
+        let array = match iter {
+            Iterable::Range { start, end } => {
+                for bound in [start, end] {
+                    let found = self.expr(bound);
+                    self.expect(&Type::Int, &found, value_pos(bound));
+                }
+                return Type::Int;
+            }
+            Iterable::Array(array) => array,
+        };
+        let ty = self.expr(array);
+        let pos = value_pos(array);
+        if has_empty_array(&ty) {
+            return self.error(CheckErrorKind::EmptyArray, pos);
+        }
+        match ty {
+            Type::Array(element) => *element,
+            ty @ (Type::Error | Type::Never) => ty,
+            other => self.error(CheckErrorKind::NotIterable(other), pos),
+        }
     }
 
     fn builtin(&mut self, name: &str, args: &[Expr], pos: Pos) -> Type {
@@ -766,6 +791,11 @@ mod tests {
             "let mut sum = 0; for i in 0..len([1, 2]) { if i == 1 { continue; } sum = sum + i; } sum",
             "fn root(n: int) -> int { for i in 0..n { if i * i >= n { return i; } } n }",
             "let i = true; for i in 0..1 { print(i + 1); } i && true",
+            "let a = [[1], [2, 3]]; let mut n = 0; for row in a { for x in row { n = n + x; } } n",
+            r#"let mut s = ""; for w in ["a", "b"] { s = s + w; } s"#,
+            r#"for b in bytes("ab") { print(b + 1); }"#,
+            "let a: [int] = []; for _ in a {}",
+            "fn first(xs: [int]) -> int { for x in xs { return x; } 0 }",
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
         }
@@ -849,6 +879,7 @@ mod tests {
             warnings("for i in 0..3 { let x = i; }"),
             ["1:21: unused variable: x"]
         );
+        assert_eq!(warnings("for x in [1] {}"), ["1:5: unused variable: x"]);
     }
 
     #[test]
@@ -1274,5 +1305,34 @@ mod tests {
             error("let x: int = for _ in 0..3 {}; x"),
             "1:14: expected int, found ()"
         );
+    }
+
+    #[test]
+    fn for_array_errors() {
+        assert_eq!(
+            error("for x in 5 {}"),
+            "1:10: cannot iterate over a value of type int"
+        );
+        assert_eq!(
+            error(r#"for c in "ab" {}"#),
+            "1:10: cannot iterate over a value of type str"
+        );
+        assert_eq!(
+            error("for x in [] {}"),
+            "1:10: cannot infer the type of an empty array"
+        );
+        assert_eq!(
+            error("for x in [[]] {}"),
+            "1:10: cannot infer the type of an empty array"
+        );
+        assert_eq!(
+            error("for x in [1] { x = 2; }"),
+            "1:16: cannot assign to immutable variable: x"
+        );
+        assert_eq!(
+            error(r#"for x in ["a"] { x - 1; }"#),
+            "1:18: expected int, found str"
+        );
+        assert_eq!(error("for x in y { x; }"), "1:10: undefined variable: y");
     }
 }

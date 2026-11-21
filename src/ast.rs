@@ -79,8 +79,7 @@ pub enum ExprKind {
     For {
         var: String,
         var_pos: Pos,
-        start: Box<Expr>,
-        end: Box<Expr>,
+        iter: Iterable,
         body: Block,
     },
     Return(Option<Box<Expr>>),
@@ -92,6 +91,13 @@ impl ExprKind {
     pub fn at(self, pos: Pos) -> Expr {
         Expr { kind: self, pos }
     }
+}
+
+// What stands after `in` in `for x in ...`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Iterable {
+    Range { start: Box<Expr>, end: Box<Expr> },
+    Array(Box<Expr>),
 }
 
 // What stands between the brackets of `a[...]`.

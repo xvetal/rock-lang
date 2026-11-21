@@ -1,7 +1,7 @@
 fn sum(xs: [int]) -> int {
     let mut total = 0;
-    for i in 0..len(xs) {
-        total = total + xs[i];
+    for x in xs {
+        total = total + x;
     }
     total
 }

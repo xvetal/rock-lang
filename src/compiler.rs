@@ -1,6 +1,8 @@
 use std::rc::Rc;
 
-use crate::ast::{BinaryOp, Block, Expr, ExprKind, FnDecl, Index, LogicalOp, Program, Stmt};
+use crate::ast::{
+    BinaryOp, Block, Expr, ExprKind, FnDecl, Index, Iterable, LogicalOp, Program, Stmt,
+};
 use crate::chunk::{Bytecode, Chunk, Function, Op};
 use crate::lexer::Pos;
 
@@ -268,12 +270,8 @@ impl<'a> Compiler<'a> {
                 self.chunk.emit(Op::Unit, pos);
             }
             ExprKind::For {
-                var,
-                start,
-                end,
-                body,
-                ..
-            } => self.for_loop(var, start, end, body, pos),
+                var, iter, body, ..
+            } => self.for_loop(var, iter, body, pos),
             ExprKind::Break => {
                 self.leave_loop_body(pos);
                 let jump = self.chunk.emit(Op::Jump(0), pos);
@@ -298,17 +296,34 @@ impl<'a> Compiler<'a> {
 
     // Runs as `let counter = start; let end = end;` and then
     // `while counter < end { let var = counter; body; counter = counter + 1; }`.
-    // The counter and the end are locals without a name, which no program can
-    // reach. The increment comes before the condition and is skipped on entry,
-    // so `continue` jumps back to it, as in `while`. It runs only after
-    // `counter < end`, so it cannot overflow.
-    fn for_loop(&mut self, var: &str, start: &Expr, end: &Expr, body: &Block, pos: Pos) {
-        let counter = self.locals.len();
-        for bound in [start, end] {
-            self.expr(bound);
-            self.chunk.emit(Op::DefineLocal, bound.pos);
-            self.locals.push(String::new());
-        }
+    // An array goes into a local before them, the counter runs from 0 to its
+    // length, and `var` is `array[counter]`.
+    // These locals have no name, so no program can reach them. The increment
+    // comes before the condition and is skipped on entry, so `continue` jumps
+    // back to it, as in `while`. It runs only after `counter < end`, so it
+    // cannot overflow.
+    fn for_loop(&mut self, var: &str, iter: &Iterable, body: &Block, pos: Pos) {
+        let outer = self.locals.len();
+        let array = match iter {
+            Iterable::Range { start, end } => {
+                self.expr(start);
+                self.define_hidden(start.pos);
+                self.expr(end);
+                self.define_hidden(end.pos);
+                None
+            }
+            Iterable::Array(array) => {
+                self.expr(array);
+                self.define_hidden(array.pos);
+                self.chunk.emit(Op::Int(0), pos);
+                self.define_hidden(pos);
+                self.chunk.emit(Op::GetLocal(outer), pos);
+                self.chunk.emit(Op::Len, pos);
+                self.define_hidden(pos);
+                Some(outer)
+            }
+        };
+        let counter = self.locals.len() - 2;
         let to_cond = self.chunk.emit(Op::Jump(0), pos);
         let next = self.chunk.code.len();
         self.chunk.emit(Op::GetLocal(counter), pos);
@@ -326,7 +341,16 @@ impl<'a> Compiler<'a> {
             locals: self.locals.len(),
             breaks: Vec::new(),
         });
-        self.chunk.emit(Op::GetLocal(counter), pos);
+        match array {
+            Some(array) => {
+                self.chunk.emit(Op::GetLocal(array), pos);
+                self.chunk.emit(Op::GetLocal(counter), pos);
+                self.chunk.emit(Op::Index, pos);
+            }
+            None => {
+                self.chunk.emit(Op::GetLocal(counter), pos);
+            }
+        }
         self.chunk.emit(Op::DefineLocal, pos);
         self.locals.push(var.to_string());
         self.block(body, pos);
@@ -339,9 +363,15 @@ impl<'a> Compiler<'a> {
         for jump in innermost.breaks {
             self.chunk.patch_jump(jump);
         }
-        self.chunk.emit(Op::DropLocals(2), pos);
-        self.locals.truncate(counter);
+        let count = self.locals.len() - outer;
+        self.chunk.emit(Op::DropLocals(count), pos);
+        self.locals.truncate(outer);
         self.chunk.emit(Op::Unit, pos);
+    }
+
+    fn define_hidden(&mut self, pos: Pos) {
+        self.chunk.emit(Op::DefineLocal, pos);
+        self.locals.push(String::new());
     }
 
     fn builtin(&mut self, name: &str, args: &[Expr], pos: Pos) {
@@ -717,6 +747,42 @@ mod tests {
                 Op::DropLocals(1),
                 Op::Jump(5),
                 Op::DropLocals(2),
+                Op::Unit,
+            ]
+        );
+    }
+
+    #[test]
+    fn for_over_array_indexes_a_hidden_copy() {
+        assert_eq!(
+            code("for _ in [7] {}"),
+            [
+                Op::Int(7),
+                Op::Array(1),
+                Op::DefineLocal,
+                Op::Int(0),
+                Op::DefineLocal,
+                Op::GetLocal(0),
+                Op::Len,
+                Op::DefineLocal,
+                Op::Jump(13),
+                Op::GetLocal(1),
+                Op::Int(1),
+                Op::Binary(Add),
+                Op::SetLocal(1),
+                Op::GetLocal(1),
+                Op::GetLocal(2),
+                Op::Binary(Lt),
+                Op::JumpIfFalse(25),
+                Op::GetLocal(0),
+                Op::GetLocal(1),
+                Op::Index,
+                Op::DefineLocal,
+                Op::Unit,
+                Op::Pop,
+                Op::DropLocals(1),
+                Op::Jump(9),
+                Op::DropLocals(3),
                 Op::Unit,
             ]
         );

@@ -801,6 +801,42 @@ mod tests {
     }
 
     #[test]
+    fn for_over_arrays() {
+        assert_eq!(
+            output(r#"for w in ["a", "b"] { print(w); } for row in [[1], [2, 3]] { print(row); }"#),
+            "a\nb\n[1]\n[2, 3]\n"
+        );
+        assert_eq!(
+            output(r#"for b in bytes("hi") { print(b); }"#),
+            "104\n105\n"
+        );
+        assert_eq!(
+            vm("let a: [int] = []; let mut n = 0; for _ in a { n = n + 1; } n"),
+            Ok(Value::Int(0))
+        );
+        assert_eq!(
+            vm("let mut sum = 0;
+                 for x in [1, 2, 3, 4, 5] { if x == 4 { break; } if x == 2 { continue; } sum = sum + x; }
+                 sum"),
+            Ok(Value::Int(4))
+        );
+        assert_eq!(
+            vm("for x in [1, 2] { let a = x; continue; } { let c = 3; c }"),
+            Ok(Value::Int(3))
+        );
+    }
+
+    #[test]
+    fn for_iterates_over_a_copy() {
+        assert_eq!(
+            output(
+                "let mut a = [1, 2]; for x in a { push(a, x * 10); a[0] = 0; print(x); } print(a);"
+            ),
+            "1\n2\n[0, 2, 10, 20]\n"
+        );
+    }
+
+    #[test]
     fn functions_shadow_print() {
         assert_eq!(output("fn print(x: int) -> int { x } print(1);"), "");
     }

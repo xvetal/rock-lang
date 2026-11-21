@@ -1,7 +1,8 @@
 use std::fmt;
 
 use crate::ast::{
-    BinaryOp, Block, Expr, ExprKind, FnDecl, Index, LogicalOp, Param, Program, Stmt, Type, UnaryOp,
+    BinaryOp, Block, Expr, ExprKind, FnDecl, Index, Iterable, LogicalOp, Param, Program, Stmt,
+    Type, UnaryOp,
 };
 use crate::lexer::{Located, Pos, Token};
 
@@ -572,8 +573,23 @@ impl Parser {
         let var_pos = self.peek_pos();
         let var = self.ident("variable name after 'for'")?;
         self.expect(Token::In, "'in'")?;
+        let iter = self.iterable()?;
+        let body = self.loop_body()?;
+        Ok(ExprKind::For {
+            var,
+            var_pos,
+            iter,
+            body,
+        }
+        .at(pos))
+    }
+
+    fn iterable(&mut self) -> Result<Iterable, ParseError> {
         let start = self.expr()?;
-        self.expect(Token::DotDot, "'..'")?;
+        if self.peek() != &Token::DotDot {
+            return Ok(Iterable::Array(Box::new(start)));
+        }
+        self.advance();
         // In `for i in 0.. {}` the body would otherwise be taken for the end.
         if self.peek() == &Token::LBrace {
             return Err(ParseErrorKind::Expected {
@@ -583,15 +599,10 @@ impl Parser {
             .at(self.peek_pos()));
         }
         let end = self.expr()?;
-        let body = self.loop_body()?;
-        Ok(ExprKind::For {
-            var,
-            var_pos,
+        Ok(Iterable::Range {
             start: Box::new(start),
             end: Box::new(end),
-            body,
-        }
-        .at(pos))
+        })
     }
 
     fn loop_body(&mut self) -> Result<Block, ParseError> {
@@ -794,14 +805,18 @@ mod tests {
             }
             ExprKind::For {
                 var_pos,
-                start,
-                end,
+                iter,
                 body,
                 ..
             } => {
                 *var_pos = NO_POS;
-                strip(start);
-                strip(end);
+                match iter {
+                    Iterable::Range { start, end } => {
+                        strip(start);
+                        strip(end);
+                    }
+                    Iterable::Array(array) => strip(array),
+                }
                 strip_block(body);
             }
         }
@@ -1014,14 +1029,25 @@ mod tests {
     }
 
     fn for_expr(var: &str, start: Expr, end: Expr, body: Expr) -> Expr {
+        let iter = Iterable::Range {
+            start: Box::new(start),
+            end: Box::new(end),
+        };
+        for_node(var, iter, body)
+    }
+
+    fn for_in(var: &str, array: Expr, body: Expr) -> Expr {
+        for_node(var, Iterable::Array(Box::new(array)), body)
+    }
+
+    fn for_node(var: &str, iter: Iterable, body: Expr) -> Expr {
         let ExprKind::Block(body) = body.kind else {
             panic!("loop body must be a block");
         };
         ExprKind::For {
             var: var.to_string(),
             var_pos: NO_POS,
-            start: Box::new(start),
-            end: Box::new(end),
+            iter,
             body,
         }
         .at(NO_POS)
@@ -1566,6 +1592,26 @@ mod tests {
                 call("len", vec![var("s")]),
                 block(vec![Stmt::Expr(cont())], None)
             ))
+        );
+    }
+
+    #[test]
+    fn for_over_array() {
+        assert_eq!(
+            parse("for x in a { x }"),
+            Ok(for_in("x", var("a"), block(vec![], Some(var("x")))))
+        );
+        assert_eq!(
+            parse("for x in f(a)[1..] {}"),
+            Ok(for_in(
+                "x",
+                indexed(call("f", vec![var("a")]), vec![slice(Some(int(1)), None)]),
+                block(vec![], None)
+            ))
+        );
+        assert_eq!(
+            parse("for x in 0 {}"),
+            Ok(for_in("x", int(0), block(vec![], None)))
         );
     }
 
@@ -2558,10 +2604,6 @@ mod tests {
         assert_eq!(
             parse("for i in 0.. {}"),
             Err(at(expected("end of range", Token::LBrace), 1, 14))
-        );
-        assert_eq!(
-            parse("for i in 0 {}"),
-            Err(at(expected("'..'", Token::LBrace), 1, 12))
         );
     }
 

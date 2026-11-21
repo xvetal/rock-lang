@@ -7,8 +7,11 @@
 - [ ] Ranges as values, such as `let r = 0..n;`, with their own type, printing and slicing with `s[r]`
 - [ ] Inclusive ranges `a..=b`
 
+## Strings
+- [ ] Iterating over the characters of a string, once there is a `char` type
+
 ## Arrays
-- [ ] Iterating over an array with `for x in a`
+- [ ] The index together with the element, as in `for (i, x) in enumerate(a)`, once there are tuples
 - [ ] `pop`, once there is `Option` to return from an empty array
 
 ## Methods

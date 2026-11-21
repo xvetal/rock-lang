@@ -12,7 +12,7 @@ Version 0.13.0: programs are statically typed and type-checked before they run, 
 - Operator precedence and left associativity
 - Variables with `let`, immutable unless declared with `let mut`, with an optional type such as `let a: [int] = [];`, including shadowing, and assignment `x = value;`
 - Blocks with lexical scope; `if`/`else` and blocks are expressions
-- `while` loops and `for i in a..b` loops over integers, with `break` and `continue`
+- `while` loops, `for i in a..b` loops over integers and `for x in a` loops over arrays, with `break` and `continue`
 - Functions with `fn` and `return`, including recursion; parameters and return values have types, e.g. `fn add(a: int, b: int) -> int`; parameters can be `mut`; functions are values, can be called before their declaration, and see only their parameters and locals
 - Arrays such as `[1, 2, 3]` with indexing `a[i]`, assignment `a[i] = v` and appending with `push(a, v)`; arrays are values, so a change never reaches a copy
 - Slices `s[a..b]`, `s[a..]` and `s[..b]` of strings, by bytes, and of arrays
