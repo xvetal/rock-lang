@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-21
+
 ### Added
 - `for` loops: `for i in a..b { … }` runs the body for `i` from `a` up to, not including, `b`, and not at all if `a >= b`; both bounds are evaluated once, before the loop. `for x in a { … }` runs the body for each element of the array `a`, which is also evaluated once, so changing `a` in the body does not change the loop. The loop variable is a new immutable variable on each iteration, visible only in the body, and `break` and `continue` work as in `while`. `for` and `in` are now keywords, so they can no longer name variables
 
