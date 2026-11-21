@@ -12,6 +12,8 @@ pub enum Token {
     If,
     Else,
     While,
+    For,
+    In,
     Fn,
     Return,
     Break,
@@ -57,6 +59,8 @@ impl fmt::Display for Token {
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
             Token::While => write!(f, "while"),
+            Token::For => write!(f, "for"),
+            Token::In => write!(f, "in"),
             Token::Fn => write!(f, "fn"),
             Token::Return => write!(f, "return"),
             Token::Break => write!(f, "break"),
@@ -188,6 +192,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
                     "if" => Token::If,
                     "else" => Token::Else,
                     "while" => Token::While,
+                    "for" => Token::For,
+                    "in" => Token::In,
                     "fn" => Token::Fn,
                     "return" => Token::Return,
                     "break" => Token::Break,
@@ -371,6 +377,14 @@ mod tests {
     #[test]
     fn while_keyword() {
         assert_eq!(tokens("while"), Ok(vec![Token::While, Token::Eof]));
+    }
+
+    #[test]
+    fn for_keywords() {
+        assert_eq!(
+            tokens("for in index"),
+            Ok(vec![Token::For, Token::In, ident("index"), Token::Eof])
+        );
     }
 
     #[test]

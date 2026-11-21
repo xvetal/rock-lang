@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- `for` loops over integers: `for i in a..b { … }` runs the body for `i` from `a` up to, not including, `b`, and not at all if `a >= b`. Both bounds are evaluated once, before the loop. `i` is a new immutable variable on each iteration, visible only in the body, and `break` and `continue` work as in `while`. `for` and `in` are now keywords, so they can no longer name variables
+
 ## [0.13.0] - 2026-11-20
 
 ### Added

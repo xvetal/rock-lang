@@ -732,6 +732,75 @@ mod tests {
     }
 
     #[test]
+    fn for_loops() {
+        assert_eq!(output("for i in 0..3 { print(i); }"), "0\n1\n2\n");
+        assert_eq!(output("for i in -2..0 { print(i); }"), "-2\n-1\n");
+        assert_eq!(
+            vm("let mut n = 0; for _ in 5..5 { n = n + 1; } for _ in 3..1 { n = n + 1; } n"),
+            Ok(Value::Int(0))
+        );
+        assert_eq!(
+            vm("let mut sum = 0; for i in 1..4 { for j in 0..i { sum = sum + j; } } sum"),
+            Ok(Value::Int(4))
+        );
+    }
+
+    #[test]
+    fn for_bounds_are_evaluated_once() {
+        assert_eq!(
+            output("fn f(n: int) -> int { print(n); n } for _ in f(0)..f(2) {}"),
+            "0\n2\n"
+        );
+        assert_eq!(
+            vm(
+                "let mut n = 3; let mut count = 0; for _ in 0..n { n = n - 1; count = count + 1; } count"
+            ),
+            Ok(Value::Int(3))
+        );
+    }
+
+    #[test]
+    fn break_and_continue_in_for() {
+        assert_eq!(
+            vm("let mut sum = 0;
+                 for i in 0..10 { if i == 4 { break; } if i == 1 { continue; } sum = sum + i; }
+                 sum"),
+            Ok(Value::Int(5))
+        );
+        assert_eq!(vm("while true { for _ in 0..break {} }"), Ok(Value::Unit));
+        assert_eq!(
+            vm("for i in 0..3 { let a = i; continue; } { let c = 3; c }"),
+            Ok(Value::Int(3))
+        );
+    }
+
+    #[test]
+    fn for_does_not_overflow_at_the_end() {
+        assert_eq!(
+            output("let max = 9223372036854775807; for i in max - 2..max { print(i); }"),
+            "9223372036854775805\n9223372036854775806\n"
+        );
+    }
+
+    #[test]
+    fn session_after_for() {
+        assert_eq!(
+            session(&[
+                "for i in 0..2 { i; }",
+                "for i in 0..2 { 1 / i; }",
+                "let x = 5;",
+                "x"
+            ]),
+            [
+                Ok(Value::Unit),
+                Err("1:19: division by zero".to_string()),
+                Ok(Value::Unit),
+                Ok(Value::Int(5)),
+            ]
+        );
+    }
+
+    #[test]
     fn functions_shadow_print() {
         assert_eq!(output("fn print(x: int) -> int { x } print(1);"), "");
     }

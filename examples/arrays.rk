@@ -1,9 +1,7 @@
 fn sum(xs: [int]) -> int {
     let mut total = 0;
-    let mut i = 0;
-    while i < len(xs) {
+    for i in 0..len(xs) {
         total = total + xs[i];
-        i = i + 1;
     }
     total
 }
@@ -16,10 +14,8 @@ print(["a", "b, c"]);
 
 let zeros = [0, 0, 0, 0];
 let mut squares = zeros;
-let mut i = 0;
-while i < len(squares) {
+for i in 0..len(squares) {
     squares[i] = i * i;
-    i = i + 1;
 }
 print(squares);
 print(squares[1..3]);

@@ -76,6 +76,13 @@ pub enum ExprKind {
         cond: Box<Expr>,
         body: Block,
     },
+    For {
+        var: String,
+        var_pos: Pos,
+        start: Box<Expr>,
+        end: Box<Expr>,
+        body: Block,
+    },
     Return(Option<Box<Expr>>),
     Break,
     Continue,

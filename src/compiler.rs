@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::ast::{Block, Expr, ExprKind, FnDecl, Index, LogicalOp, Program, Stmt};
+use crate::ast::{BinaryOp, Block, Expr, ExprKind, FnDecl, Index, LogicalOp, Program, Stmt};
 use crate::chunk::{Bytecode, Chunk, Function, Op};
 use crate::lexer::Pos;
 
@@ -65,6 +65,7 @@ struct Compiler<'a> {
 }
 
 struct Loop {
+    // Where both `continue` and the end of the body jump.
     start: usize,
     temps: usize,
     locals: usize,
@@ -266,6 +267,13 @@ impl<'a> Compiler<'a> {
                 }
                 self.chunk.emit(Op::Unit, pos);
             }
+            ExprKind::For {
+                var,
+                start,
+                end,
+                body,
+                ..
+            } => self.for_loop(var, start, end, body, pos),
             ExprKind::Break => {
                 self.leave_loop_body(pos);
                 let jump = self.chunk.emit(Op::Jump(0), pos);
@@ -286,6 +294,54 @@ impl<'a> Compiler<'a> {
                 self.chunk.emit(Op::Return, pos);
             }
         }
+    }
+
+    // Runs as `let counter = start; let end = end;` and then
+    // `while counter < end { let var = counter; body; counter = counter + 1; }`.
+    // The counter and the end are locals without a name, which no program can
+    // reach. The increment comes before the condition and is skipped on entry,
+    // so `continue` jumps back to it, as in `while`. It runs only after
+    // `counter < end`, so it cannot overflow.
+    fn for_loop(&mut self, var: &str, start: &Expr, end: &Expr, body: &Block, pos: Pos) {
+        let counter = self.locals.len();
+        for bound in [start, end] {
+            self.expr(bound);
+            self.chunk.emit(Op::DefineLocal, bound.pos);
+            self.locals.push(String::new());
+        }
+        let to_cond = self.chunk.emit(Op::Jump(0), pos);
+        let next = self.chunk.code.len();
+        self.chunk.emit(Op::GetLocal(counter), pos);
+        self.chunk.emit(Op::Int(1), pos);
+        self.chunk.emit(Op::Binary(BinaryOp::Add), pos);
+        self.chunk.emit(Op::SetLocal(counter), pos);
+        self.chunk.patch_jump(to_cond);
+        self.chunk.emit(Op::GetLocal(counter), pos);
+        self.chunk.emit(Op::GetLocal(counter + 1), pos);
+        self.chunk.emit(Op::Binary(BinaryOp::Lt), pos);
+        let to_exit = self.chunk.emit(Op::JumpIfFalse(0), pos);
+        self.loops.push(Loop {
+            start: next,
+            temps: self.temps,
+            locals: self.locals.len(),
+            breaks: Vec::new(),
+        });
+        self.chunk.emit(Op::GetLocal(counter), pos);
+        self.chunk.emit(Op::DefineLocal, pos);
+        self.locals.push(var.to_string());
+        self.block(body, pos);
+        self.chunk.emit(Op::Pop, pos);
+        self.chunk.emit(Op::DropLocals(1), pos);
+        self.locals.pop();
+        self.chunk.emit(Op::Jump(next), pos);
+        let innermost = self.loops.pop().expect("pushed above");
+        self.chunk.patch_jump(to_exit);
+        for jump in innermost.breaks {
+            self.chunk.patch_jump(jump);
+        }
+        self.chunk.emit(Op::DropLocals(2), pos);
+        self.locals.truncate(counter);
+        self.chunk.emit(Op::Unit, pos);
     }
 
     fn builtin(&mut self, name: &str, args: &[Expr], pos: Pos) {
@@ -384,7 +440,7 @@ impl<'a> Compiler<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::BinaryOp::{Add, Mul};
+    use crate::ast::BinaryOp::{Add, Lt, Mul};
     use crate::checker::{Env, check};
     use crate::lexer::tokenize;
     use crate::parser::Parser;
@@ -598,6 +654,69 @@ mod tests {
                 Op::DropLocals(1),
                 Op::Pop,
                 Op::Jump(0),
+                Op::Unit,
+            ]
+        );
+    }
+
+    #[test]
+    fn for_keeps_counter_and_end_in_locals() {
+        assert_eq!(
+            code("for _ in 0..3 {}"),
+            [
+                Op::Int(0),
+                Op::DefineLocal,
+                Op::Int(3),
+                Op::DefineLocal,
+                Op::Jump(9),
+                Op::GetLocal(0),
+                Op::Int(1),
+                Op::Binary(Add),
+                Op::SetLocal(0),
+                Op::GetLocal(0),
+                Op::GetLocal(1),
+                Op::Binary(Lt),
+                Op::JumpIfFalse(19),
+                Op::GetLocal(0),
+                Op::DefineLocal,
+                Op::Unit,
+                Op::Pop,
+                Op::DropLocals(1),
+                Op::Jump(5),
+                Op::DropLocals(2),
+                Op::Unit,
+            ]
+        );
+    }
+
+    #[test]
+    fn continue_in_for_jumps_to_increment() {
+        assert_eq!(
+            code("for _ in 0..3 { continue; }"),
+            [
+                Op::Int(0),
+                Op::DefineLocal,
+                Op::Int(3),
+                Op::DefineLocal,
+                Op::Jump(9),
+                Op::GetLocal(0),
+                Op::Int(1),
+                Op::Binary(Add),
+                Op::SetLocal(0),
+                Op::GetLocal(0),
+                Op::GetLocal(1),
+                Op::Binary(Lt),
+                Op::JumpIfFalse(22),
+                Op::GetLocal(0),
+                Op::DefineLocal,
+                Op::DropLocals(1),
+                Op::Jump(5),
+                Op::Pop,
+                Op::Unit,
+                Op::Pop,
+                Op::DropLocals(1),
+                Op::Jump(5),
+                Op::DropLocals(2),
                 Op::Unit,
             ]
         );

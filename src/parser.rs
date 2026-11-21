@@ -137,7 +137,10 @@ impl Parser {
                             Token::RBrace => Ok(Stmt::Expr(value)),
                             _ if matches!(
                                 value.kind,
-                                ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::While { .. }
+                                ExprKind::Block(_)
+                                    | ExprKind::If { .. }
+                                    | ExprKind::While { .. }
+                                    | ExprKind::For { .. }
                             ) =>
                             {
                                 Ok(Stmt::Expr(value))
@@ -434,7 +437,10 @@ impl Parser {
     fn postfix(&mut self) -> Result<Expr, ParseError> {
         // `if c { }` followed by `[1]` on the next line is two expressions, as
         // in a statement. Parentheses allow indexing: `(if c { a } else { b })[0]`.
-        let block_like = matches!(self.peek(), Token::LBrace | Token::If | Token::While);
+        let block_like = matches!(
+            self.peek(),
+            Token::LBrace | Token::If | Token::While | Token::For
+        );
         let target = self.primary()?;
         if block_like {
             return Ok(target);
@@ -502,6 +508,7 @@ impl Parser {
             }
             Token::If => self.if_expr(pos),
             Token::While => self.while_expr(pos),
+            Token::For => self.for_expr(pos),
             Token::Return if self.in_fn => self.return_expr(pos),
             Token::Return => Err(ParseErrorKind::ReturnOutsideFn.at(pos)),
             Token::Break if self.in_loop => Ok(ExprKind::Break.at(pos)),
@@ -553,16 +560,47 @@ impl Parser {
 
     fn while_expr(&mut self, pos: Pos) -> Result<Expr, ParseError> {
         let cond = self.expr()?;
-        self.expect(Token::LBrace, "'{'")?;
-        let outer = self.in_loop;
-        self.in_loop = true;
-        let body = self.block()?;
-        self.in_loop = outer;
+        let body = self.loop_body()?;
         Ok(ExprKind::While {
             cond: Box::new(cond),
             body,
         }
         .at(pos))
+    }
+
+    fn for_expr(&mut self, pos: Pos) -> Result<Expr, ParseError> {
+        let var_pos = self.peek_pos();
+        let var = self.ident("variable name after 'for'")?;
+        self.expect(Token::In, "'in'")?;
+        let start = self.expr()?;
+        self.expect(Token::DotDot, "'..'")?;
+        // In `for i in 0.. {}` the body would otherwise be taken for the end.
+        if self.peek() == &Token::LBrace {
+            return Err(ParseErrorKind::Expected {
+                what: "end of range",
+                found: Token::LBrace,
+            }
+            .at(self.peek_pos()));
+        }
+        let end = self.expr()?;
+        let body = self.loop_body()?;
+        Ok(ExprKind::For {
+            var,
+            var_pos,
+            start: Box::new(start),
+            end: Box::new(end),
+            body,
+        }
+        .at(pos))
+    }
+
+    fn loop_body(&mut self) -> Result<Block, ParseError> {
+        self.expect(Token::LBrace, "'{'")?;
+        let outer = self.in_loop;
+        self.in_loop = true;
+        let body = self.block();
+        self.in_loop = outer;
+        body
     }
 
     fn return_expr(&mut self, pos: Pos) -> Result<Expr, ParseError> {
@@ -752,6 +790,18 @@ mod tests {
             }
             ExprKind::While { cond, body } => {
                 strip(cond);
+                strip_block(body);
+            }
+            ExprKind::For {
+                var_pos,
+                start,
+                end,
+                body,
+                ..
+            } => {
+                *var_pos = NO_POS;
+                strip(start);
+                strip(end);
                 strip_block(body);
             }
         }
@@ -958,6 +1008,20 @@ mod tests {
         };
         ExprKind::While {
             cond: Box::new(cond),
+            body,
+        }
+        .at(NO_POS)
+    }
+
+    fn for_expr(var: &str, start: Expr, end: Expr, body: Expr) -> Expr {
+        let ExprKind::Block(body) = body.kind else {
+            panic!("loop body must be a block");
+        };
+        ExprKind::For {
+            var: var.to_string(),
+            var_pos: NO_POS,
+            start: Box::new(start),
+            end: Box::new(end),
             body,
         }
         .at(NO_POS)
@@ -1480,6 +1544,48 @@ mod tests {
     }
 
     #[test]
+    fn for_loop() {
+        assert_eq!(
+            parse("for i in 0..n { i }"),
+            Ok(for_expr(
+                "i",
+                int(0),
+                var("n"),
+                block(vec![], Some(var("i")))
+            ))
+        );
+    }
+
+    #[test]
+    fn for_bounds_are_expressions() {
+        assert_eq!(
+            parse("for i in a + 1..len(s) { continue; }"),
+            Ok(for_expr(
+                "i",
+                bin(Add, var("a"), int(1)),
+                call("len", vec![var("s")]),
+                block(vec![Stmt::Expr(cont())], None)
+            ))
+        );
+    }
+
+    #[test]
+    fn for_statement_without_semicolon() {
+        assert_eq!(
+            parse_program("for _ in 0..3 {} 1"),
+            Ok(Program {
+                stmts: vec![Stmt::Expr(for_expr(
+                    "_",
+                    int(0),
+                    int(3),
+                    block(vec![], None)
+                ))],
+                expr: Some(int(1))
+            })
+        );
+    }
+
+    #[test]
     fn function_declaration() {
         assert_eq!(
             parse_program("fn add(a: int, b: int) -> int { a + b } add(1, 2)"),
@@ -1745,6 +1851,16 @@ mod tests {
             panic!("expected a unary expression");
         };
         assert_eq!(call.pos, Pos { line: 2, col: 4 });
+    }
+
+    #[test]
+    fn for_is_located_at_its_keyword() {
+        let expr = parse_located("for\n  i in 0..3 {}");
+        assert_eq!(expr.pos, Pos { line: 1, col: 1 });
+        let ExprKind::For { var_pos, .. } = expr.kind else {
+            panic!("expected a for loop");
+        };
+        assert_eq!(var_pos, Pos { line: 2, col: 3 });
     }
 
     #[test]
@@ -2430,6 +2546,54 @@ mod tests {
         assert_eq!(
             parse("a[1.."),
             Err(at(expected("expression", Token::Eof), 1, 6))
+        );
+    }
+
+    #[test]
+    fn for_needs_both_bounds() {
+        assert_eq!(
+            parse("for i in ..3 {}"),
+            Err(at(expected("expression", Token::DotDot), 1, 10))
+        );
+        assert_eq!(
+            parse("for i in 0.. {}"),
+            Err(at(expected("end of range", Token::LBrace), 1, 14))
+        );
+        assert_eq!(
+            parse("for i in 0 {}"),
+            Err(at(expected("'..'", Token::LBrace), 1, 12))
+        );
+    }
+
+    #[test]
+    fn bad_for_header() {
+        assert_eq!(
+            parse("for 0..3 {}"),
+            Err(at(
+                expected("variable name after 'for'", Token::Int(0)),
+                1,
+                5
+            ))
+        );
+        assert_eq!(
+            parse("for i 0..3 {}"),
+            Err(at(expected("'in'", Token::Int(0)), 1, 7))
+        );
+        assert_eq!(
+            parse("for i in 0..3"),
+            Err(at(expected("'{'", Token::Eof), 1, 14))
+        );
+        assert_eq!(
+            parse_program("let in = 1;"),
+            Err(at(expected("variable name after 'let'", Token::In), 1, 5))
+        );
+    }
+
+    #[test]
+    fn break_in_for_bounds_is_outside_the_loop() {
+        assert_eq!(
+            parse_program("for i in 0..break {}"),
+            Err(at(ParseErrorKind::BreakOutsideLoop, 1, 13))
         );
     }
 }

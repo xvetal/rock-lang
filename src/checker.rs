@@ -480,6 +480,27 @@ impl<'a> Checker<'a> {
                 self.diverges = diverges;
                 Type::Unit
             }
+            ExprKind::For {
+                var,
+                var_pos,
+                start,
+                end,
+                body,
+            } => {
+                for bound in [start, end] {
+                    let found = self.expr(bound);
+                    self.expect(&Type::Int, &found, value_pos(bound));
+                }
+                let diverges = self.diverges;
+                let outer = self.locals.len();
+                self.locals
+                    .push(Local::new(var, Type::Int, false, *var_pos));
+                let body_ty = self.block(body);
+                self.expect(&Type::Unit, &body_ty, block_value_pos(body, pos));
+                self.end_scope(outer);
+                self.diverges = diverges;
+                Type::Unit
+            }
             ExprKind::Return(value) => {
                 let (found, pos) = match value {
                     Some(value) => (self.expr(value), value_pos(value)),
@@ -742,6 +763,9 @@ mod tests {
             "[][0..0] == [1]",
             r#"bytes("ab")[1] - bytes("a")[0] + len(bytes(""))"#,
             "fn bytes(n: int) -> int { n } bytes(1)",
+            "let mut sum = 0; for i in 0..len([1, 2]) { if i == 1 { continue; } sum = sum + i; } sum",
+            "fn root(n: int) -> int { for i in 0..n { if i * i >= n { return i; } } n }",
+            "let i = true; for i in 0..1 { print(i + 1); } i && true",
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
         }
@@ -814,6 +838,16 @@ mod tests {
         assert_eq!(
             warnings("let mut _x = 1;"),
             ["1:9: variable does not need to be mutable: _x"]
+        );
+    }
+
+    #[test]
+    fn for_variable_warnings() {
+        assert_eq!(warnings("for i in 0..3 {}"), ["1:5: unused variable: i"]);
+        assert_eq!(warnings("for _ in 0..3 {}"), [] as [String; 0]);
+        assert_eq!(
+            warnings("for i in 0..3 { let x = i; }"),
+            ["1:21: unused variable: x"]
         );
     }
 
@@ -1217,6 +1251,28 @@ mod tests {
         assert_eq!(
             error(r#"let b: [str] = bytes("a");"#),
             "1:16: expected [str], found [int]"
+        );
+    }
+
+    #[test]
+    fn for_errors() {
+        assert_eq!(
+            error("for i in 0..3 { i = 1; }"),
+            "1:17: cannot assign to immutable variable: i"
+        );
+        assert_eq!(
+            error("for _ in true..3 {}"),
+            "1:10: expected int, found bool"
+        );
+        assert_eq!(
+            error(r#"for _ in 0.."3" {}"#),
+            "1:13: expected int, found str"
+        );
+        assert_eq!(error("for i in 0..3 { i }"), "1:17: expected (), found int");
+        assert_eq!(error("for _ in 0..3 {} i"), "1:18: undefined variable: i");
+        assert_eq!(
+            error("let x: int = for _ in 0..3 {}; x"),
+            "1:14: expected int, found ()"
         );
     }
 }
