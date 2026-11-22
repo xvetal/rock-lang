@@ -1,5 +1,8 @@
 # TODO
 
+## Lexer
+- [ ] Block comments `/* … */`
+
 ## Parser
 - [ ] Switch to a Pratt parser when more precedence levels appear
 

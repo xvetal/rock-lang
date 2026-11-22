@@ -11,6 +11,7 @@ Version 0.14.0: programs are statically typed and type-checked before they run, 
 - Comparisons `== != < <= > >=` and logical `! && ||` with short-circuit
 - Operator precedence and left associativity
 - Variables with `let`, immutable unless declared with `let mut`, with an optional type such as `let a: [int] = [];`, including shadowing, and assignment `x = value;`
+- Line comments `// ...`
 - Blocks with lexical scope; `if`/`else` and blocks are expressions
 - `while` loops, `for i in a..b` loops over integers and `for x in a` loops over arrays, with `break` and `continue`
 - Functions with `fn` and `return`, including recursion; parameters and return values have types, e.g. `fn add(a: int, b: int) -> int`; parameters can be `mut`; functions are values, can be called before their declaration, and see only their parameters and locals
@@ -37,7 +38,7 @@ while n > 1 {
     acc = acc * n;
     n = n - 1;
 }
-print(acc);
+print(acc); // 120
 acc > 100
 ```
 

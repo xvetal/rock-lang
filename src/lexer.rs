@@ -139,6 +139,12 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
             '-' if eat(&mut chars, &mut pos, '>') => Token::Arrow,
             '-' => Token::Minus,
             '*' => Token::Star,
+            '/' if eat(&mut chars, &mut pos, '/') => {
+                while let Some(c) = chars.next_if(|&c| c != '\n') {
+                    pos.advance(c);
+                }
+                continue;
+            }
             '/' => Token::Slash,
             '=' if eat(&mut chars, &mut pos, '=') => Token::EqEq,
             '=' => Token::Eq,
@@ -323,6 +329,27 @@ mod tests {
     #[test]
     fn skips_whitespace() {
         assert_eq!(tokens(" \t\r\n42 "), Ok(vec![Token::Int(42), Token::Eof]));
+    }
+
+    #[test]
+    fn skips_comments() {
+        assert_eq!(
+            tokens("1 // one\n+ 2 /// two"),
+            Ok(vec![Token::Int(1), Token::Plus, Token::Int(2), Token::Eof])
+        );
+        assert_eq!(tokens("// only a comment\n"), Ok(vec![Token::Eof]));
+        assert_eq!(
+            tokens("1 / 2 // 3"),
+            Ok(vec![Token::Int(1), Token::Slash, Token::Int(2), Token::Eof])
+        );
+    }
+
+    #[test]
+    fn comment_may_hold_any_character() {
+        assert_eq!(
+            tokens("// привет & | . \"\n1"),
+            Ok(vec![Token::Int(1), Token::Eof])
+        );
     }
 
     #[test]
@@ -590,6 +617,24 @@ mod tests {
             tokens(r#""a\"b\\c\nd\te""#),
             Ok(vec![Token::Str("a\"b\\c\nd\te".to_string()), Token::Eof])
         );
+    }
+
+    #[test]
+    fn comment_in_string_is_text() {
+        assert_eq!(
+            tokens(r#""a // b""#),
+            Ok(vec![Token::Str("a // b".to_string()), Token::Eof])
+        );
+    }
+
+    #[test]
+    fn positions_after_comment() {
+        let positions: Vec<String> = tokenize("// x\n  1 // y")
+            .unwrap()
+            .iter()
+            .map(|t| t.pos.to_string())
+            .collect();
+        assert_eq!(positions, ["2:3", "2:4"]);
     }
 
     #[test]

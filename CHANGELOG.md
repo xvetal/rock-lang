@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Line comments: `//` starts a comment that runs to the end of the line. A comment can stand wherever a space can and may contain any characters
+
 ## [0.14.0] - 2026-11-21
 
 ### Added

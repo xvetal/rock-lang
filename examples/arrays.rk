@@ -1,5 +1,6 @@
 fn sum(xs: [int]) -> int {
     let mut total = 0;
+    // `for x in xs` runs the body once for each element.
     for x in xs {
         total = total + x;
     }
@@ -19,7 +20,7 @@ for i in 0..len(squares) {
 }
 print(squares);
 print(squares[1..3]);
-print(zeros);
+print(zeros); // arrays are values: squares was a copy
 
 let mut words: [str] = [];
 push(words, "rock");
