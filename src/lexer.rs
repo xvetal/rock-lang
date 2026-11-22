@@ -22,6 +22,7 @@ pub enum Token {
     Minus,
     Star,
     Slash,
+    Percent,
     Eq,
     EqEq,
     NotEq,
@@ -69,6 +70,7 @@ impl fmt::Display for Token {
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
+            Token::Percent => write!(f, "%"),
             Token::Eq => write!(f, "="),
             Token::EqEq => write!(f, "=="),
             Token::NotEq => write!(f, "!="),
@@ -146,6 +148,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
                 continue;
             }
             '/' => Token::Slash,
+            '%' => Token::Percent,
             '=' if eat(&mut chars, &mut pos, '=') => Token::EqEq,
             '=' => Token::Eq,
             '!' if eat(&mut chars, &mut pos, '=') => Token::NotEq,
@@ -273,12 +276,13 @@ mod tests {
     #[test]
     fn single_char_tokens() {
         assert_eq!(
-            tokens("+-*/(){}"),
+            tokens("+-*/%(){}"),
             Ok(vec![
                 Token::Plus,
                 Token::Minus,
                 Token::Star,
                 Token::Slash,
+                Token::Percent,
                 Token::LParen,
                 Token::RParen,
                 Token::LBrace,
@@ -523,7 +527,7 @@ mod tests {
 
     #[test]
     fn display_round_trip() {
-        let source = "let mut x = f ( 1 , y , true , false ) * 2 / 3 - 4 + 5 \
+        let source = "let mut x = f ( 1 , y , true , false ) * 2 / 3 % 2 - 4 + 5 \
                       == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; \
                       { } if x { } else { } while x { break ; continue } \
                       fn f ( a : int ) -> int { return } [ ] [ .. ] \

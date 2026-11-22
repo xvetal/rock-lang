@@ -6,7 +6,7 @@ A toy programming language written in Rust, built for learning.
 
 Version 0.14.0: programs are statically typed and type-checked before they run, then executed on a bytecode virtual machine; all syntax and type errors are reported at once, together with warnings for unused variables and unneeded `mut`.
 
-- Integer, boolean and string literals, `+ - * /`, unary minus, parentheses
+- Integer, boolean and string literals, `+ - * / %`, unary minus, parentheses
 - Strings with the escapes `\n`, `\t`, `\\` and `\"`, concatenation with `+`, and comparison by character codes
 - Comparisons `== != < <= > >=` and logical `! && ||` with short-circuit
 - Operator precedence and left associativity

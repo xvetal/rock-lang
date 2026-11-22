@@ -86,13 +86,10 @@ pub fn binary(op: &BinaryOp, l: Value, r: Value) -> Result<Value, RuntimeErrorKi
         },
         BinaryOp::Sub => checked(l.as_int().checked_sub(r.as_int())),
         BinaryOp::Mul => checked(l.as_int().checked_mul(r.as_int())),
-        BinaryOp::Div => {
-            let (l, r) = (l.as_int(), r.as_int());
-            if r == 0 {
-                return Err(RuntimeErrorKind::DivisionByZero);
-            }
-            checked(l.checked_div(r))
-        }
+        BinaryOp::Div => checked(l.as_int().checked_div(divisor(r)?)),
+        // `i64::MIN % -1` is 0. `checked_rem` reports an overflow there,
+        // as the quotient does not fit, but the remainder does.
+        BinaryOp::Rem => Ok(Value::Int(l.as_int().wrapping_rem(divisor(r)?))),
     }
 }
 
@@ -138,6 +135,13 @@ fn slice_range(
         return Err(RuntimeErrorKind::SliceOrder { start, end });
     }
     Ok(start..end)
+}
+
+fn divisor(value: Value) -> Result<i64, RuntimeErrorKind> {
+    match value.as_int() {
+        0 => Err(RuntimeErrorKind::DivisionByZero),
+        n => Ok(n),
+    }
 }
 
 fn checked(result: Option<i64>) -> Result<Value, RuntimeErrorKind> {

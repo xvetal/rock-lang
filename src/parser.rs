@@ -392,6 +392,7 @@ impl Parser {
             let op = match self.peek() {
                 Token::Star => BinaryOp::Mul,
                 Token::Slash => BinaryOp::Div,
+                Token::Percent => BinaryOp::Rem,
                 _ => break,
             };
             let pos = self.peek_pos();
@@ -735,7 +736,7 @@ mod tests {
 
     use super::*;
     use crate::lexer::tokenize;
-    use BinaryOp::{Add, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Sub};
+    use BinaryOp::{Add, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Rem, Sub};
     use LogicalOp::{And, Or};
 
     const NO_POS: Pos = Pos { line: 0, col: 0 };
@@ -1130,6 +1131,18 @@ mod tests {
         assert_eq!(
             parse("8 / 4 / 2"),
             Ok(bin_chain(int(8), vec![(Div, int(4)), (Div, int(2))]))
+        );
+    }
+
+    #[test]
+    fn remainder_binds_like_multiplication() {
+        assert_eq!(
+            parse("1 + 7 % 3 * 2"),
+            Ok(bin(
+                Add,
+                int(1),
+                bin_chain(int(7), vec![(Rem, int(3)), (Mul, int(2))])
+            ))
         );
     }
 

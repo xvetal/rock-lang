@@ -1,0 +1,22 @@
+// Prints the numbers from 1 to 15, but "Fizz" for multiples of 3,
+// "Buzz" for multiples of 5 and "FizzBuzz" for multiples of both.
+fn fizzbuzz(n: int) -> str {
+    if n % 15 == 0 {
+        "FizzBuzz"
+    } else if n % 3 == 0 {
+        "Fizz"
+    } else if n % 5 == 0 {
+        "Buzz"
+    } else {
+        ""
+    }
+}
+
+for n in 1..16 {
+    let word = fizzbuzz(n);
+    if word == "" {
+        print(n);
+    } else {
+        print(word);
+    }
+}

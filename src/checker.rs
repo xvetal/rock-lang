@@ -575,7 +575,7 @@ impl<'a> Checker<'a> {
         self.expect(&operand, &right_ty, value_pos(right));
         match op {
             BinaryOp::Add => operand,
-            BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => Type::Int,
+            BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => Type::Int,
             _ => Type::Bool,
         }
     }
@@ -1121,6 +1121,7 @@ mod tests {
         assert_eq!(error(r#""a" == 1"#), "1:8: expected str, found int");
         assert_eq!(error(r#"-"a""#), "1:2: expected int, found str");
         assert_eq!(error(r#""a" < 1"#), "1:7: expected str, found int");
+        assert_eq!(error(r#""a" % 2"#), "1:1: expected int, found str");
         assert_eq!(
             errors(r#""a" - "b""#),
             [

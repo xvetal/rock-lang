@@ -837,6 +837,25 @@ mod tests {
     }
 
     #[test]
+    fn remainder() {
+        assert_eq!(vm("7 % 3"), Ok(Value::Int(1)));
+        assert_eq!(vm("-7 % 3"), Ok(Value::Int(-1)));
+        assert_eq!(vm("7 % -3"), Ok(Value::Int(1)));
+        assert_eq!(vm("-7 % -3"), Ok(Value::Int(-1)));
+        assert_eq!(vm("100 % 7 % 3"), Ok(Value::Int(2)));
+        assert_eq!(
+            vm("let a = -7; let b = 3; a / b * b + a % b == a"),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(vm("-9223372036854775808 % -1"), Ok(Value::Int(0)));
+    }
+
+    #[test]
+    fn remainder_by_zero() {
+        assert_eq!(error("1 % 0"), "1:3: division by zero");
+    }
+
+    #[test]
     fn functions_shadow_print() {
         assert_eq!(output("fn print(x: int) -> int { x } print(1);"), "");
     }
