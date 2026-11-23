@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-23
+
 ### Added
 - The remainder operator `%`, with the precedence of `*` and `/`. The result has the sign of the dividend, so `-7 % 3` is `-1` and `a / b * b + a % b` is always `a`; `x % 0` fails at runtime as division by zero
 - Line comments: `//` starts a comment that runs to the end of the line. A comment can stand wherever a space can and may contain any characters
