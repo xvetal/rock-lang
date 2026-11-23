@@ -23,6 +23,11 @@ pub enum Token {
     Star,
     Slash,
     Percent,
+    PlusEq,
+    MinusEq,
+    StarEq,
+    SlashEq,
+    PercentEq,
     Eq,
     EqEq,
     NotEq,
@@ -71,6 +76,11 @@ impl fmt::Display for Token {
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
             Token::Percent => write!(f, "%"),
+            Token::PlusEq => write!(f, "+="),
+            Token::MinusEq => write!(f, "-="),
+            Token::StarEq => write!(f, "*="),
+            Token::SlashEq => write!(f, "/="),
+            Token::PercentEq => write!(f, "%="),
             Token::Eq => write!(f, "="),
             Token::EqEq => write!(f, "=="),
             Token::NotEq => write!(f, "!="),
@@ -137,9 +147,12 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
         pos.advance(c);
         let token = match c {
             _ if c.is_whitespace() => continue,
+            '+' if eat(&mut chars, &mut pos, '=') => Token::PlusEq,
             '+' => Token::Plus,
             '-' if eat(&mut chars, &mut pos, '>') => Token::Arrow,
+            '-' if eat(&mut chars, &mut pos, '=') => Token::MinusEq,
             '-' => Token::Minus,
+            '*' if eat(&mut chars, &mut pos, '=') => Token::StarEq,
             '*' => Token::Star,
             '/' if eat(&mut chars, &mut pos, '/') => {
                 while let Some(c) = chars.next_if(|&c| c != '\n') {
@@ -147,7 +160,9 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
                 }
                 continue;
             }
+            '/' if eat(&mut chars, &mut pos, '=') => Token::SlashEq,
             '/' => Token::Slash,
+            '%' if eat(&mut chars, &mut pos, '=') => Token::PercentEq,
             '%' => Token::Percent,
             '=' if eat(&mut chars, &mut pos, '=') => Token::EqEq,
             '=' => Token::Eq,
@@ -526,9 +541,32 @@ mod tests {
     }
 
     #[test]
+    fn compound_assignment_tokens() {
+        assert_eq!(
+            tokens("+= -= *= /= %= + = ->= -=>"),
+            Ok(vec![
+                Token::PlusEq,
+                Token::MinusEq,
+                Token::StarEq,
+                Token::SlashEq,
+                Token::PercentEq,
+                Token::Plus,
+                Token::Eq,
+                Token::Arrow,
+                Token::Eq,
+                Token::MinusEq,
+                Token::Gt,
+                Token::Eof
+            ])
+        );
+        assert_eq!(tokens("//= x\n%="), Ok(vec![Token::PercentEq, Token::Eof]));
+    }
+
+    #[test]
     fn display_round_trip() {
         let source = "let mut x = f ( 1 , y , true , false ) * 2 / 3 % 2 - 4 + 5 \
                       == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; \
+                      x += 1 ; x -= 1 ; x *= 1 ; x /= 1 ; x %= 1 ; \
                       { } if x { } else { } while x { break ; continue } \
                       fn f ( a : int ) -> int { return } [ ] [ .. ] \
                       \"a\\\"b\\\\c\\nd\\te\"";

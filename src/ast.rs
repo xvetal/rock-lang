@@ -233,6 +233,8 @@ pub enum Stmt {
     Assign {
         name: String,
         indexes: Vec<(Pos, Index)>,
+        // The operator of a compound assignment such as `x += 1`.
+        op: Option<(BinaryOp, Pos)>,
         value: Expr,
         pos: Pos,
     },

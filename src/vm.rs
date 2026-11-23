@@ -856,6 +856,82 @@ mod tests {
     }
 
     #[test]
+    fn compound_assignment() {
+        assert_eq!(
+            vm("let mut x = 10; x += 5; x -= 3; x *= 2; x /= 5; x %= 3; x"),
+            Ok(Value::Int(1))
+        );
+        assert_eq!(
+            vm(r#"let mut s = "ab"; s += "c"; s == "abc""#),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            vm("let mut a = [[1, 2], [3, 4]]; a[1][0] -= a[0][1]; a[1][0]"),
+            Ok(Value::Int(1))
+        );
+    }
+
+    #[test]
+    fn compound_assignment_reads_before_value() {
+        assert_eq!(vm("let mut x = 1; x += { x = 5; 1 }; x"), Ok(Value::Int(2)));
+        assert_eq!(
+            output(
+                "fn i() -> int { print(0); 1 } let mut a = [1, 2]; \
+                 a[i()] += { print(1); 10 }; print(a);"
+            ),
+            "0\n1\n[1, 12]\n"
+        );
+    }
+
+    #[test]
+    fn loop_control_in_compound_assignment() {
+        assert_eq!(
+            vm("let mut a = [1]; while true { a[0] += break; } let z = 9; z"),
+            Ok(Value::Int(9))
+        );
+        assert_eq!(
+            output(
+                "let mut a = [5]; for i in 0..3 { a[{ if i == 1 { continue; } 0 }] += i; } \
+                 let z = 9; print(z); print(a);"
+            ),
+            "9\n[7]\n"
+        );
+    }
+
+    #[test]
+    fn compound_assignment_errors() {
+        assert_eq!(error("let mut x = 1; x /= 0; x"), "1:18: division by zero");
+        assert_eq!(
+            error("let mut a = [1]; a[0] %= 0; a"),
+            "1:23: division by zero"
+        );
+        assert_eq!(
+            error("let mut a = [1]; a[1] += 1; a"),
+            "1:19: index 1 out of bounds for length 1"
+        );
+    }
+
+    #[test]
+    fn session_after_compound_assignment_error() {
+        assert_eq!(
+            session(&[
+                "let mut a = [1];",
+                "a[0] /= 0;",
+                "a[0] += 1;",
+                "let x = 5;",
+                "x + a[0]"
+            ]),
+            [
+                Ok(Value::Unit),
+                Err("1:6: division by zero".to_string()),
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Ok(Value::Int(7)),
+            ]
+        );
+    }
+
+    #[test]
     fn functions_shadow_print() {
         assert_eq!(output("fn print(x: int) -> int { x } print(1);"), "");
     }

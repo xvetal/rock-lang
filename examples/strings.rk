@@ -5,8 +5,8 @@ fn greet(name: str) -> str {
 let mut line = "";
 let mut i = 0;
 while i < 5 {
-    line = line + "*";
-    i = i + 1;
+    line += "*";
+    i += 1;
 }
 print(greet("Rock"));
 print(line);

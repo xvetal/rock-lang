@@ -10,7 +10,7 @@ Version 0.14.0: programs are statically typed and type-checked before they run, 
 - Strings with the escapes `\n`, `\t`, `\\` and `\"`, concatenation with `+`, and comparison by character codes
 - Comparisons `== != < <= > >=` and logical `! && ||` with short-circuit
 - Operator precedence and left associativity
-- Variables with `let`, immutable unless declared with `let mut`, with an optional type such as `let a: [int] = [];`, including shadowing, and assignment `x = value;`
+- Variables with `let`, immutable unless declared with `let mut`, with an optional type such as `let a: [int] = [];`, including shadowing, assignment `x = value;` and compound assignment `x += v;` (also `-=`, `*=`, `/=`, `%=`)
 - Line comments `// ...`
 - Blocks with lexical scope; `if`/`else` and blocks are expressions
 - `while` loops, `for i in a..b` loops over integers and `for x in a` loops over arrays, with `break` and `continue`
@@ -35,8 +35,8 @@ Version 0.14.0: programs are statically typed and type-checked before they run, 
 let mut n = 5;
 let mut acc = 1;
 while n > 1 {
-    acc = acc * n;
-    n = n - 1;
+    acc *= n;
+    n -= 1;
 }
 print(acc); // 120
 acc > 100

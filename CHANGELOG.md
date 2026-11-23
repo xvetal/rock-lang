@@ -5,6 +5,7 @@
 ### Added
 - The remainder operator `%`, with the precedence of `*` and `/`. The result has the sign of the dividend, so `-7 % 3` is `-1` and `a / b * b + a % b` is always `a`; `x % 0` fails at runtime as division by zero
 - Line comments: `//` starts a comment that runs to the end of the line. A comment can stand wherever a space can and may contain any characters
+- Compound assignment `x += v;`, as well as `-=`, `*=`, `/=` and `%=`, for a `mut` variable or an element of one, as in `a[i] += 1;`. Like `=`, it is a statement, not an expression. The variable or element is read before `v` is evaluated, and each index is evaluated only once; `s += "a"` appends to a string
 
 ## [0.14.0] - 2026-11-21
 

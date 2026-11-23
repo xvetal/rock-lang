@@ -344,12 +344,23 @@ impl<'a> Checker<'a> {
                 Stmt::Assign {
                     name,
                     indexes,
+                    op: None,
                     value,
                     pos,
                 } => {
                     let found = self.expr(value);
                     let ty = self.place(name, indexes, *pos);
                     self.expect(&ty, &found, value_pos(value));
+                }
+                Stmt::Assign {
+                    name,
+                    indexes,
+                    op: Some((op, _)),
+                    value,
+                    pos,
+                } => {
+                    let ty = self.place(name, indexes, *pos);
+                    self.compound(op, ty, *pos, value);
                 }
                 Stmt::Expr(expr) => {
                     self.expr(expr);
@@ -580,6 +591,20 @@ impl<'a> Checker<'a> {
         }
     }
 
+    // Unlike in `binary`, only the place decides whether the operands are
+    // strings, so `x += "a"` with an int `x` blames the value.
+    fn compound(&mut self, op: &BinaryOp, ty: Type, pos: Pos, value: &Expr) {
+        let operand = match (op, ty) {
+            (BinaryOp::Add, Type::Str) => Type::Str,
+            (_, ty) => {
+                self.expect(&Type::Int, &ty, pos);
+                Type::Int
+            }
+        };
+        let found = self.expr(value);
+        self.expect(&operand, &found, value_pos(value));
+    }
+
     // `pos` locates the value of type `ty`, so an error can point at the
     // part of `a[i][j]` that is not an array.
     fn index(&mut self, mut ty: Type, mut pos: Pos, indexes: &[(Pos, Index)]) -> Type {
@@ -796,6 +821,9 @@ mod tests {
             r#"for b in bytes("ab") { print(b + 1); }"#,
             "let a: [int] = []; for _ in a {}",
             "fn first(xs: [int]) -> int { for x in xs { return x; } 0 }",
+            "let mut x = 10; x += 1; x -= 2; x *= 3; x /= 4; x %= 5; x",
+            r#"let mut s = "a"; s += "b" + s; s"#,
+            r#"let mut a = [["a"]]; a[0][0] += "b"; let mut n = [1]; n[0] *= len(a); n"#,
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
         }
@@ -811,6 +839,8 @@ mod tests {
             "fn f(g: fn()) { g() }",
             "let mut a = [1]; a[0] = 2; a",
             "let mut a = [1]; push(a, 2); a",
+            "let mut x = 0; x += x;",
+            "let mut a = [1]; a[0] += 1; a",
         ] {
             assert_eq!(warnings(input), [] as [String; 0], "{input}");
         }
@@ -857,6 +887,14 @@ mod tests {
                 "1:9: unused variable: x",
                 "1:9: variable does not need to be mutable: x"
             ]
+        );
+    }
+
+    #[test]
+    fn compound_assignment_is_not_a_use() {
+        assert_eq!(
+            warnings("let mut x = 0; x += 1;"),
+            ["1:9: unused variable: x"]
         );
     }
 
@@ -1335,5 +1373,41 @@ mod tests {
             "1:18: expected int, found str"
         );
         assert_eq!(error("for x in y { x; }"), "1:10: undefined variable: y");
+    }
+
+    #[test]
+    fn compound_assignment_errors() {
+        assert_eq!(
+            error(r#"let mut x = 1; x += "a";"#),
+            "1:21: expected int, found str"
+        );
+        assert_eq!(
+            error("let mut b = true; b += 1;"),
+            "1:19: expected int, found bool"
+        );
+        assert_eq!(
+            errors(r#"let mut s = "a"; s -= "b"; s"#),
+            [
+                "1:18: expected int, found str",
+                "1:23: expected int, found str"
+            ]
+        );
+        assert_eq!(
+            error("let mut a = [true]; a[0] *= 2; a"),
+            "1:21: expected int, found bool"
+        );
+        assert_eq!(
+            error("let x = 1; x += 1;"),
+            "1:12: cannot assign to immutable variable: x"
+        );
+        assert_eq!(
+            error(r#"let mut s = "a"; s[1..] += "b"; s"#),
+            "1:19: cannot assign to a slice"
+        );
+        assert_eq!(error("y += 1;"), "1:1: undefined variable: y");
+        assert_eq!(
+            error("let mut a = [1]; a[true] += 2; a"),
+            "1:20: expected int, found bool"
+        );
     }
 }

@@ -96,6 +96,14 @@ impl<'a> Compiler<'a> {
                 Stmt::Assign {
                     name,
                     indexes,
+                    op: Some((op, op_pos)),
+                    value,
+                    pos,
+                } => self.compound(name, indexes, op, *op_pos, value, *pos),
+                Stmt::Assign {
+                    name,
+                    indexes,
+                    op: None,
                     value,
                     pos,
                 } => {
@@ -415,6 +423,50 @@ impl<'a> Compiler<'a> {
             self.expr(index);
             self.temps += 1;
         }
+    }
+
+    // The place is read before the value is evaluated. Each index is
+    // evaluated once and kept in an unnamed local for both the read and the
+    // write.
+    fn compound(
+        &mut self,
+        name: &str,
+        indexes: &[(Pos, Index)],
+        op: &BinaryOp,
+        op_pos: Pos,
+        value: &Expr,
+        pos: Pos,
+    ) {
+        for (bracket, index) in indexes {
+            let Index::At(index) = index else {
+                panic!("the checker rejects assignment to a slice");
+            };
+            self.expr(index);
+            self.chunk.emit(Op::DefineLocal, *bracket);
+            self.locals.push(String::new());
+        }
+        let first = self.locals.len() - indexes.len();
+        let slot = self.local(name).expect(RESOLVED);
+        self.chunk.emit(Op::GetLocal(slot), pos);
+        for (i, (bracket, _)) in indexes.iter().enumerate() {
+            self.chunk.emit(Op::GetLocal(first + i), *bracket);
+            self.chunk.emit(Op::Index, *bracket);
+        }
+        self.temps += 1;
+        self.expr(value);
+        self.temps -= 1;
+        self.chunk.emit(Op::Binary(op.clone()), op_pos);
+        if indexes.is_empty() {
+            self.chunk.emit(Op::SetLocal(slot), pos);
+            return;
+        }
+        for i in 0..indexes.len() {
+            self.chunk.emit(Op::GetLocal(first + i), pos);
+        }
+        let depth = indexes.len();
+        self.chunk.emit(Op::SetIndex { slot, depth }, pos);
+        self.chunk.emit(Op::DropLocals(depth), pos);
+        self.locals.truncate(first);
     }
 
     fn innermost_loop(&mut self) -> &mut Loop {
@@ -843,6 +895,49 @@ mod tests {
                 Op::Int(0),
                 Op::Int(0),
                 Op::SetIndex { slot: 0, depth: 2 }
+            ]
+        );
+    }
+
+    #[test]
+    fn compound_assignment_reads_then_writes() {
+        assert_eq!(
+            code("let mut x = 1; x += 2;"),
+            [
+                Op::Int(1),
+                Op::DefineLocal,
+                Op::GetLocal(0),
+                Op::Int(2),
+                Op::Binary(Add),
+                Op::SetLocal(0)
+            ]
+        );
+    }
+
+    #[test]
+    fn compound_index_assignment_keeps_indexes_in_locals() {
+        assert_eq!(
+            code("let mut a = [[1]]; a[0][1] *= 2;"),
+            [
+                Op::Int(1),
+                Op::Array(1),
+                Op::Array(1),
+                Op::DefineLocal,
+                Op::Int(0),
+                Op::DefineLocal,
+                Op::Int(1),
+                Op::DefineLocal,
+                Op::GetLocal(0),
+                Op::GetLocal(1),
+                Op::Index,
+                Op::GetLocal(2),
+                Op::Index,
+                Op::Int(2),
+                Op::Binary(Mul),
+                Op::GetLocal(1),
+                Op::GetLocal(2),
+                Op::SetIndex { slot: 0, depth: 2 },
+                Op::DropLocals(2)
             ]
         );
     }

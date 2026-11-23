@@ -127,7 +127,12 @@ impl Parser {
                     Ok(value) => {
                         let pos = self.peek_pos();
                         match self.peek() {
-                            Token::Eq => self.assign_stmt(value),
+                            Token::Eq
+                            | Token::PlusEq
+                            | Token::MinusEq
+                            | Token::StarEq
+                            | Token::SlashEq
+                            | Token::PercentEq => self.assign_stmt(value),
                             Token::Semicolon => {
                                 self.advance();
                                 Ok(Stmt::Expr(value))
@@ -307,20 +312,29 @@ impl Parser {
     // Only a variable, possibly indexed, can be assigned to. A write into
     // any other value, such as `f()[0]`, would be lost with that value.
     fn assign_stmt(&mut self, target: Expr) -> Result<Stmt, ParseError> {
-        let eq_pos = self.peek_pos();
-        self.advance();
+        let op_pos = self.peek_pos();
+        let token = self.advance();
+        let op = match token {
+            Token::PlusEq => Some(BinaryOp::Add),
+            Token::MinusEq => Some(BinaryOp::Sub),
+            Token::StarEq => Some(BinaryOp::Mul),
+            Token::SlashEq => Some(BinaryOp::Div),
+            Token::PercentEq => Some(BinaryOp::Rem),
+            _ => None,
+        };
         let (var, indexes) = match target.kind {
             ExprKind::Index { target, indexes } => (*target, indexes),
             _ => (target, Vec::new()),
         };
         let ExprKind::Var(name) = var.kind else {
-            return Err(ParseErrorKind::Unexpected(Token::Eq).at(eq_pos));
+            return Err(ParseErrorKind::Unexpected(token).at(op_pos));
         };
         let value = self.expr()?;
         self.expect(Token::Semicolon, "';'")?;
         Ok(Stmt::Assign {
             name,
             indexes,
+            op: op.map(|op| (op, op_pos)),
             value,
             pos: var.pos,
         })
@@ -847,11 +861,15 @@ mod tests {
             }
             Stmt::Assign {
                 indexes,
+                op,
                 value,
                 pos,
                 ..
             } => {
                 *pos = NO_POS;
+                if let Some((_, pos)) = op {
+                    *pos = NO_POS;
+                }
                 strip_indexes(indexes);
                 strip(value);
             }
@@ -1265,6 +1283,7 @@ mod tests {
                 stmts: vec![Stmt::Assign {
                     name: "s".to_string(),
                     indexes: vec![(NO_POS, slice(Some(int(1)), None))],
+                    op: None,
                     value: var("t"),
                     pos: NO_POS
                 }],
@@ -1531,6 +1550,7 @@ mod tests {
                 stmts: vec![Stmt::Assign {
                     name: "x".to_string(),
                     indexes: vec![],
+                    op: None,
                     value: bin(Add, var("x"), int(1)),
                     pos: NO_POS
                 }],
@@ -1547,12 +1567,48 @@ mod tests {
                 stmts: vec![Stmt::Assign {
                     name: "a".to_string(),
                     indexes: vec![(NO_POS, Index::At(int(0))), (NO_POS, Index::At(var("i")))],
+                    op: None,
                     value: int(1),
                     pos: NO_POS
                 }],
                 expr: None
             })
         );
+    }
+
+    #[test]
+    fn compound_assignment() {
+        assert_eq!(
+            parse_program("x -= 1; a[i] %= y + 2;"),
+            Ok(Program {
+                stmts: vec![
+                    Stmt::Assign {
+                        name: "x".to_string(),
+                        indexes: vec![],
+                        op: Some((Sub, NO_POS)),
+                        value: int(1),
+                        pos: NO_POS
+                    },
+                    Stmt::Assign {
+                        name: "a".to_string(),
+                        indexes: vec![(NO_POS, Index::At(var("i")))],
+                        op: Some((Rem, NO_POS)),
+                        value: bin(Add, var("y"), int(2)),
+                        pos: NO_POS
+                    }
+                ],
+                expr: None
+            })
+        );
+        for (input, op) in [("x += 1;", Add), ("x *= 1;", Mul), ("x /= 1;", Div)] {
+            let Ok(Program { stmts, .. }) = parse_program(input) else {
+                panic!("{input}: expected a program");
+            };
+            let [Stmt::Assign { op: found, .. }] = &stmts[..] else {
+                panic!("{input}: expected one assignment");
+            };
+            assert_eq!(*found, Some((op, NO_POS)), "{input}");
+        }
     }
 
     #[test]
@@ -1923,6 +1979,18 @@ mod tests {
     }
 
     #[test]
+    fn compound_assignment_is_located_at_its_operator() {
+        let program = Parser::new(tokenize("a[0]\n  *= 2;").unwrap())
+            .parse()
+            .unwrap();
+        let [Stmt::Assign { op, pos, .. }] = &program.stmts[..] else {
+            panic!("expected one assignment");
+        };
+        assert_eq!(*pos, Pos { line: 1, col: 1 });
+        assert_eq!(*op, Some((Mul, Pos { line: 2, col: 3 })));
+    }
+
+    #[test]
     fn empty_program() {
         assert_eq!(
             parse_program(""),
@@ -2275,6 +2343,10 @@ mod tests {
             parse_program("x = 1"),
             Err(at(expected("';'", Token::Eof), 1, 6))
         );
+        assert_eq!(
+            parse_program("x += 1"),
+            Err(at(expected("';'", Token::Eof), 1, 7))
+        );
     }
 
     #[test]
@@ -2295,6 +2367,14 @@ mod tests {
             parse_program("{ 1 = 2; }"),
             Err(at(ParseErrorKind::Unexpected(Token::Eq), 1, 5))
         );
+        assert_eq!(
+            parse_program("1 += 2;"),
+            Err(at(ParseErrorKind::Unexpected(Token::PlusEq), 1, 3))
+        );
+        assert_eq!(
+            parse_program("f()[0] -= 1;"),
+            Err(at(ParseErrorKind::Unexpected(Token::MinusEq), 1, 8))
+        );
     }
 
     #[test]
@@ -2302,6 +2382,10 @@ mod tests {
         assert_eq!(
             parse_program("let y = x = 1;"),
             Err(at(expected("';'", Token::Eq), 1, 11))
+        );
+        assert_eq!(
+            parse_program("let y = (x += 1);"),
+            Err(at(expected("')'", Token::PlusEq), 1, 12))
         );
     }
 
