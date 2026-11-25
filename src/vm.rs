@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::chunk::{Bytecode, Function, Op};
 use crate::runtime::{MAX_CALL_DEPTH, RuntimeError, RuntimeErrorKind, binary, slice, unary};
-use crate::value::Value;
+use crate::value::{Struct, Value};
 
 pub struct Vm<W: Write> {
     out: W,
@@ -142,6 +142,18 @@ impl<W: Write> Vm<W> {
                 Op::Array(count) => {
                     let items = self.stack.split_off(self.stack.len() - count);
                     self.stack.push(Value::Array(Rc::new(items)));
+                }
+                Op::Struct { def, fields } => {
+                    let values = self.stack.split_off(self.stack.len() - fields.len());
+                    let mut ordered = vec![Value::Unit; fields.len()];
+                    for (value, place) in values.into_iter().zip(fields) {
+                        ordered[place] = value;
+                    }
+                    let value = Struct {
+                        def,
+                        fields: ordered,
+                    };
+                    self.stack.push(Value::Struct(Rc::new(value)));
                 }
                 Op::Index => {
                     let index = self.pop().as_int();
@@ -927,6 +939,62 @@ mod tests {
                 Ok(Value::Unit),
                 Ok(Value::Unit),
                 Ok(Value::Int(7)),
+            ]
+        );
+    }
+
+    #[test]
+    fn structs() {
+        assert_eq!(
+            output(
+                r#"struct P { x: int, y: int } struct S { name: str, points: [P], tag: E }
+                   struct E {}
+                   print(S { points: [P { y: 2, x: 1 }], tag: E {}, name: "a, b" });"#
+            ),
+            "S { name: \"a, b\", points: [P { x: 1, y: 2 }], tag: E {} }\n"
+        );
+        assert_eq!(
+            vm(r#"struct P { x: int, s: [str] } P { x: 1, s: ["a"] } == P { s: ["a"], x: 1 }"#),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            vm(
+                "struct P { x: int } fn f(p: P) -> [P] { [p, p] } f(P { x: 1 }) == [P { x: 1 }, P { x: 2 }]"
+            ),
+            Ok(Value::Bool(false))
+        );
+        assert_eq!(
+            output("struct P { x: int } for p in [P { x: 1 }, P { x: 2 }] { print(p); }"),
+            "P { x: 1 }\nP { x: 2 }\n"
+        );
+    }
+
+    #[test]
+    fn struct_fields_are_evaluated_in_written_order() {
+        assert_eq!(
+            output(
+                "struct P { x: int, y: int } print(P { y: { print(1); 1 }, x: { print(2); 2 } });"
+            ),
+            "1\n2\nP { x: 2, y: 1 }\n"
+        );
+    }
+
+    #[test]
+    fn session_keeps_structs() {
+        assert_eq!(
+            session(&[
+                "struct P { x: int }",
+                "let p = P { x: 1 };",
+                "struct P { y: int }",
+                "fn f(q: P) -> P { q }",
+                "f(p) == P { x: 1 }"
+            ]),
+            [
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Err("1:8: duplicate struct: P".to_string()),
+                Ok(Value::Unit),
+                Ok(Value::Bool(true)),
             ]
         );
     }

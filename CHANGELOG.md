@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Structs: `struct Point { x: int, y: int }` declares a new type, and `Point { x: 1, y: 2 }` creates a value of it, with every field given once, in any order; the fields are evaluated in the order written. Structs are declared at the top level and can be used before their declaration, also as field types; a struct can contain itself only through an array, as in `struct Tree { kids: [Tree] }`. `==` and `!=` compare structs field by field, and `print` shows them as `Point { x: 1, y: 2 }`. In the condition of `if` and `while` and after `in`, a struct literal needs parentheses: `if p == (Point { x: 1, y: 2 }) { … }`. `struct` is now a keyword
+
 ## [0.15.0] - 2026-11-23
 
 ### Added

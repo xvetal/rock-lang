@@ -16,9 +16,10 @@ Version 0.15.0: programs are statically typed and type-checked before they run, 
 - `while` loops, `for i in a..b` loops over integers and `for x in a` loops over arrays, with `break` and `continue`
 - Functions with `fn` and `return`, including recursion; parameters and return values have types, e.g. `fn add(a: int, b: int) -> int`; parameters can be `mut`; functions are values, can be called before their declaration, and see only their parameters and locals
 - Arrays such as `[1, 2, 3]` with indexing `a[i]`, assignment `a[i] = v` and appending with `push(a, v)`; arrays are values, so a change never reaches a copy
+- Structs such as `struct Point { x: int, y: int }`, declared at the top level, with literals `Point { x: 1, y: 2 }`, comparison with `==` and printing
 - Slices `s[a..b]`, `s[a..]` and `s[..b]` of strings, by bytes, and of arrays
 - The built-in `print`, `len`, which returns the length of a string in bytes or of an array, `push`, and `bytes`, which returns the bytes of a string as `[int]`
-- Static types `int`, `bool`, `str`, `()`, array types such as `[int]` and function types such as `fn(int) -> int`
+- Static types `int`, `bool`, `str`, `()`, array types such as `[int]`, function types such as `fn(int) -> int` and struct types such as `Point`
 - Errors with line and column: parse errors (including nesting deeper than 256 levels) and type errors (mismatched types, undefined names, wrong argument counts, assignment to immutable variables), all reported at once, and runtime errors (division by zero, integer overflow, stack overflow, index out of bounds, bad slice bounds)
 - Warnings with line and column: unused variables and parameters (names starting with `_` are exempt) and `mut` that is never needed
 - Interactive REPL, running programs from a file, and checking them without running with `rock check`

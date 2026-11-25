@@ -5,11 +5,13 @@ use crate::ast::{
 };
 use crate::chunk::{Bytecode, Chunk, Function, Op};
 use crate::lexer::Pos;
+use crate::value::StructDef;
 
 #[derive(Debug, Clone, Default)]
 pub struct Scope {
     locals: Vec<String>,
     functions: Vec<String>,
+    structs: Vec<Rc<StructDef>>,
 }
 
 pub fn compile(program: &Program, scope: &Scope) -> Bytecode {
@@ -23,9 +25,20 @@ pub fn compile(program: &Program, scope: &Scope) -> Bytecode {
         .collect();
     let mut names = scope.functions.clone();
     names.extend(decls.iter().map(|decl| decl.name.clone()));
-    let functions = decls.iter().map(|decl| function(decl, &names)).collect();
+    let mut structs = scope.structs.clone();
+    structs.extend(program.stmts.iter().filter_map(|stmt| match stmt {
+        Stmt::Struct(decl) => Some(Rc::new(StructDef {
+            name: decl.name.clone(),
+            fields: decl.fields.iter().map(|f| f.name.clone()).collect(),
+        })),
+        _ => None,
+    }));
+    let functions = decls
+        .iter()
+        .map(|decl| function(decl, &names, &structs))
+        .collect();
 
-    let mut compiler = Compiler::new(&names, scope.locals.clone());
+    let mut compiler = Compiler::new(&names, &structs, scope.locals.clone());
     compiler.stmts(&program.stmts);
     if let Some(expr) = &program.expr {
         compiler.expr(expr);
@@ -37,6 +50,7 @@ pub fn compile(program: &Program, scope: &Scope) -> Bytecode {
     let scope = Scope {
         locals: compiler.locals,
         functions: names,
+        structs,
     };
     Bytecode {
         main: Rc::new(main),
@@ -45,9 +59,9 @@ pub fn compile(program: &Program, scope: &Scope) -> Bytecode {
     }
 }
 
-fn function(decl: &FnDecl, names: &[String]) -> Rc<Function> {
+fn function(decl: &FnDecl, names: &[String], structs: &[Rc<StructDef>]) -> Rc<Function> {
     let params = decl.params.iter().map(|p| p.name.clone()).collect();
-    let mut compiler = Compiler::new(names, params);
+    let mut compiler = Compiler::new(names, structs, params);
     compiler.block(&decl.body, decl.pos);
     compiler.chunk.emit(Op::Return, decl.pos);
     Rc::new(Function {
@@ -60,6 +74,7 @@ const RESOLVED: &str = "the checker resolves every name";
 
 struct Compiler<'a> {
     functions: &'a [String],
+    structs: &'a [Rc<StructDef>],
     chunk: Chunk,
     locals: Vec<String>,
     temps: usize,
@@ -75,9 +90,10 @@ struct Loop {
 }
 
 impl<'a> Compiler<'a> {
-    fn new(functions: &'a [String], locals: Vec<String>) -> Self {
+    fn new(functions: &'a [String], structs: &'a [Rc<StructDef>], locals: Vec<String>) -> Self {
         Self {
             functions,
+            structs,
             chunk: Chunk::default(),
             locals,
             temps: 0,
@@ -122,7 +138,7 @@ impl<'a> Compiler<'a> {
                     self.expr(expr);
                     self.chunk.emit(Op::Pop, expr.pos);
                 }
-                Stmt::Fn(_) => {}
+                Stmt::Fn(_) | Stmt::Struct(_) => {}
             }
         }
     }
@@ -211,6 +227,26 @@ impl<'a> Compiler<'a> {
                 }
                 self.temps -= items.len();
                 self.chunk.emit(Op::Array(items.len()), pos);
+            }
+            ExprKind::Struct { name, fields } => {
+                let def = self
+                    .structs
+                    .iter()
+                    .find(|def| &def.name == name)
+                    .expect(RESOLVED);
+                let mut places = Vec::new();
+                for (field, _, value) in fields {
+                    self.expr(value);
+                    self.temps += 1;
+                    let place = def.fields.iter().position(|f| f == field);
+                    places.push(place.expect(RESOLVED));
+                }
+                self.temps -= fields.len();
+                let op = Op::Struct {
+                    def: Rc::clone(def),
+                    fields: places,
+                };
+                self.chunk.emit(op, pos);
             }
             ExprKind::Index { target, indexes } => {
                 self.expr(target);
@@ -879,6 +915,25 @@ mod tests {
         assert_eq!(
             code("[1, 2][0]"),
             [Op::Int(1), Op::Int(2), Op::Array(2), Op::Int(0), Op::Index]
+        );
+    }
+
+    #[test]
+    fn struct_literal_keeps_written_order() {
+        let def = Rc::new(StructDef {
+            name: "P".to_string(),
+            fields: vec!["x".to_string(), "y".to_string()],
+        });
+        assert_eq!(
+            code("struct P { x: int, y: int } P { y: 2, x: 1 }"),
+            [
+                Op::Int(2),
+                Op::Int(1),
+                Op::Struct {
+                    def,
+                    fields: vec![1, 0]
+                }
+            ]
         );
     }
 

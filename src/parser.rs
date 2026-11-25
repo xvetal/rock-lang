@@ -1,8 +1,8 @@
 use std::fmt;
 
 use crate::ast::{
-    BinaryOp, Block, Expr, ExprKind, FnDecl, Index, Iterable, LogicalOp, Param, Program, Stmt,
-    Type, UnaryOp,
+    BinaryOp, Block, Expr, ExprKind, Field, FnDecl, Index, Iterable, LogicalOp, Param, Program,
+    Stmt, StructDecl, Type, UnaryOp,
 };
 use crate::lexer::{Located, Pos, Token};
 
@@ -23,8 +23,8 @@ pub enum ParseErrorKind {
     Expected { what: &'static str, found: Token },
     Unexpected(Token),
     IntegerTooLarge,
-    UnknownType(String),
     NestedFn,
+    NestedStruct,
     ReturnOutsideFn,
     BreakOutsideLoop,
     ContinueOutsideLoop,
@@ -51,9 +51,11 @@ impl fmt::Display for ParseErrorKind {
             }
             ParseErrorKind::Unexpected(token) => write!(f, "unexpected '{token}'"),
             ParseErrorKind::IntegerTooLarge => write!(f, "integer literal is too large"),
-            ParseErrorKind::UnknownType(name) => write!(f, "unknown type: {name}"),
             ParseErrorKind::NestedFn => {
                 write!(f, "functions can only be declared at the top level")
+            }
+            ParseErrorKind::NestedStruct => {
+                write!(f, "structs can only be declared at the top level")
             }
             ParseErrorKind::ReturnOutsideFn => write!(f, "'return' outside of a function"),
             ParseErrorKind::BreakOutsideLoop => write!(f, "'break' outside of a loop"),
@@ -73,6 +75,10 @@ pub struct Parser {
     pos: usize,
     in_fn: bool,
     in_loop: bool,
+    // False in the condition of `if` and `while` and after `in`, where
+    // `x {` starts the body, not a struct literal.
+    struct_literals: bool,
+    type_names: Vec<(String, Pos)>,
     errors: Vec<ParseError>,
     depth: usize,
 }
@@ -84,6 +90,8 @@ impl Parser {
             pos: 0,
             in_fn: false,
             in_loop: false,
+            struct_literals: true,
+            type_names: Vec::new(),
             errors: Vec::new(),
             depth: 0,
         }
@@ -94,14 +102,18 @@ impl Parser {
     pub fn parse(mut self) -> Result<Program, Vec<ParseError>> {
         let (stmts, expr) = self.sequence(true);
         if self.errors.is_empty() {
-            Ok(Program { stmts, expr })
+            Ok(Program {
+                stmts,
+                expr,
+                type_names: self.type_names,
+            })
         } else {
             Err(self.errors)
         }
     }
 
     fn block(&mut self) -> Result<Block, ParseError> {
-        let (stmts, expr) = self.sequence(false);
+        let (stmts, expr) = self.with_struct_literals(true, |p| Ok(p.sequence(false)))?;
         self.expect(Token::RBrace, "'}'")?;
         Ok(Block {
             stmts,
@@ -123,6 +135,8 @@ impl Parser {
                 Token::Let => self.let_stmt(),
                 Token::Fn if top_level => self.fn_decl(),
                 Token::Fn => Err(ParseErrorKind::NestedFn.at(pos)),
+                Token::Struct if top_level => self.struct_decl(),
+                Token::Struct => Err(ParseErrorKind::NestedStruct.at(pos)),
                 _ => match self.expr() {
                     Ok(value) => {
                         let pos = self.peek_pos();
@@ -172,8 +186,8 @@ impl Parser {
     }
 
     // Records the error and skips the rest of the broken statement: up to and
-    // including `;`, or up to `}`, `let` or `fn`, unless they are inside
-    // brackets opened while skipping.
+    // including `;`, or up to `}`, `let`, `fn` or `struct`, unless they are
+    // inside brackets opened while skipping.
     fn recover(&mut self, error: ParseError, start: usize) {
         // The failed rule may have consumed the token it complains about.
         // Step back to it: it may be the `;` or `}` to stop at.
@@ -199,7 +213,7 @@ impl Parser {
                     self.advance();
                     return;
                 }
-                Token::RBrace | Token::Let | Token::Fn => return,
+                Token::RBrace | Token::Let | Token::Fn | Token::Struct => return,
                 _ => {}
             }
             skip = false;
@@ -250,6 +264,23 @@ impl Parser {
         }))
     }
 
+    fn struct_decl(&mut self) -> Result<Stmt, ParseError> {
+        self.advance();
+        let pos = self.peek_pos();
+        let name = self.ident("struct name after 'struct'")?;
+        self.expect(Token::LBrace, "'{'")?;
+        let fields = self.list(Token::RBrace, Self::field)?;
+        Ok(Stmt::Struct(StructDecl { name, pos, fields }))
+    }
+
+    fn field(&mut self) -> Result<Field, ParseError> {
+        let pos = self.peek_pos();
+        let name = self.ident("field name")?;
+        self.expect(Token::Colon, "':'")?;
+        let ty = self.ty()?;
+        Ok(Field { name, ty, pos })
+    }
+
     fn param(&mut self) -> Result<Param, ParseError> {
         let mutable = self.mutable();
         let pos = self.peek_pos();
@@ -280,7 +311,10 @@ impl Parser {
                 "int" => Ok(Type::Int),
                 "bool" => Ok(Type::Bool),
                 "str" => Ok(Type::Str),
-                _ => Err(ParseErrorKind::UnknownType(name).at(pos)),
+                _ => {
+                    self.type_names.push((name.clone(), pos));
+                    Ok(Type::Struct(name))
+                }
             },
             Token::LParen => {
                 self.expect(Token::RParen, "')'")?;
@@ -465,7 +499,7 @@ impl Parser {
         while self.peek() == &Token::LBracket {
             let pos = self.peek_pos();
             self.advance();
-            indexes.push((pos, self.index()?));
+            indexes.push((pos, self.with_struct_literals(true, Self::index)?));
             self.expect(Token::RBracket, "']'")?;
         }
         Ok(match indexes.last() {
@@ -511,15 +545,21 @@ impl Parser {
             Token::Ident(name) => {
                 if self.peek() == &Token::LParen {
                     self.advance();
-                    let args = self.list(Token::RParen, Self::expr)?;
+                    let args =
+                        self.with_struct_literals(true, |p| p.list(Token::RParen, Self::expr))?;
                     Ok(ExprKind::Call { name, args }.at(pos))
+                } else if self.peek() == &Token::LBrace && self.struct_literals {
+                    self.advance();
+                    let fields = self.list(Token::RBrace, Self::field_value)?;
+                    Ok(ExprKind::Struct { name, fields }.at(pos))
                 } else {
                     Ok(ExprKind::Var(name).at(pos))
                 }
             }
             Token::LBrace => Ok(ExprKind::Block(self.block()?).at(pos)),
             Token::LBracket => {
-                let items = self.list(Token::RBracket, Self::expr)?;
+                let items =
+                    self.with_struct_literals(true, |p| p.list(Token::RBracket, Self::expr))?;
                 Ok(ExprKind::Array(items).at(pos))
             }
             Token::If => self.if_expr(pos),
@@ -532,7 +572,7 @@ impl Parser {
             Token::Continue if self.in_loop => Ok(ExprKind::Continue.at(pos)),
             Token::Continue => Err(ParseErrorKind::ContinueOutsideLoop.at(pos)),
             Token::LParen => {
-                let inner = self.expr()?;
+                let inner = self.with_struct_literals(true, Self::expr)?;
                 self.expect(Token::RParen, "')'")?;
                 Ok(inner)
             }
@@ -544,8 +584,15 @@ impl Parser {
         }
     }
 
+    fn field_value(&mut self) -> Result<(String, Pos, Expr), ParseError> {
+        let pos = self.peek_pos();
+        let name = self.ident("field name")?;
+        self.expect(Token::Colon, "':'")?;
+        Ok((name, pos, self.expr()?))
+    }
+
     fn if_expr(&mut self, pos: Pos) -> Result<Expr, ParseError> {
-        let cond = self.expr()?;
+        let cond = self.with_struct_literals(false, Self::expr)?;
         self.expect(Token::LBrace, "'{'")?;
         let then_branch = self.block()?;
         let else_branch = if self.peek() == &Token::Else {
@@ -575,7 +622,7 @@ impl Parser {
     }
 
     fn while_expr(&mut self, pos: Pos) -> Result<Expr, ParseError> {
-        let cond = self.expr()?;
+        let cond = self.with_struct_literals(false, Self::expr)?;
         let body = self.loop_body()?;
         Ok(ExprKind::While {
             cond: Box::new(cond),
@@ -588,7 +635,7 @@ impl Parser {
         let var_pos = self.peek_pos();
         let var = self.ident("variable name after 'for'")?;
         self.expect(Token::In, "'in'")?;
-        let iter = self.iterable()?;
+        let iter = self.with_struct_literals(false, Self::iterable)?;
         let body = self.loop_body()?;
         Ok(ExprKind::For {
             var,
@@ -658,12 +705,25 @@ impl Parser {
                 other => {
                     let what = match close {
                         Token::RBracket => "',' or ']'",
+                        Token::RBrace => "',' or '}'",
                         _ => "',' or ')'",
                     };
                     return Err(ParseErrorKind::Expected { what, found: other }.at(pos));
                 }
             }
         }
+    }
+
+    fn with_struct_literals<T>(
+        &mut self,
+        allowed: bool,
+        parse: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let outer = self.struct_literals;
+        self.struct_literals = allowed;
+        let result = parse(self);
+        self.struct_literals = outer;
+        result
     }
 
     fn nested<T>(
@@ -766,6 +826,10 @@ mod tests {
             })?;
         program.stmts.iter_mut().for_each(strip_stmt);
         program.expr.iter_mut().for_each(strip);
+        program
+            .type_names
+            .iter_mut()
+            .for_each(|(_, pos)| *pos = NO_POS);
         Ok(program)
     }
 
@@ -785,6 +849,12 @@ mod tests {
             | ExprKind::Break
             | ExprKind::Continue => {}
             ExprKind::Call { args, .. } | ExprKind::Array(args) => args.iter_mut().for_each(strip),
+            ExprKind::Struct { fields, .. } => {
+                for (_, pos, value) in fields {
+                    *pos = NO_POS;
+                    strip(value);
+                }
+            }
             ExprKind::Index { target, indexes } => {
                 strip(target);
                 strip_indexes(indexes);
@@ -878,6 +948,10 @@ mod tests {
                 decl.params.iter_mut().for_each(|p| p.pos = NO_POS);
                 strip_block(&mut decl.body);
             }
+            Stmt::Struct(decl) => {
+                decl.pos = NO_POS;
+                decl.fields.iter_mut().for_each(|f| f.pos = NO_POS);
+            }
         }
     }
 
@@ -944,6 +1018,18 @@ mod tests {
 
     fn array(items: Vec<Expr>) -> Expr {
         ExprKind::Array(items).at(NO_POS)
+    }
+
+    fn literal(name: &str, fields: Vec<(&str, Expr)>) -> Expr {
+        let fields = fields
+            .into_iter()
+            .map(|(field, value)| (field.to_string(), NO_POS, value))
+            .collect();
+        ExprKind::Struct {
+            name: name.to_string(),
+            fields,
+        }
+        .at(NO_POS)
     }
 
     fn index(target: Expr, indexes: Vec<Expr>) -> Expr {
@@ -1287,7 +1373,8 @@ mod tests {
                     value: var("t"),
                     pos: NO_POS
                 }],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -1298,7 +1385,8 @@ mod tests {
             parse_program("if x { }\n[1]"),
             Ok(Program {
                 stmts: vec![Stmt::Expr(if_expr(var("x"), block(vec![], None), None))],
-                expr: Some(array(vec![int(1)]))
+                expr: Some(array(vec![int(1)])),
+                type_names: vec![]
             })
         );
         assert_eq!(
@@ -1470,7 +1558,8 @@ mod tests {
                     vec![Stmt::Expr(call("print", vec![int(1)]))],
                     None
                 ))],
-                expr: Some(int(2))
+                expr: Some(int(2)),
+                type_names: vec![]
             })
         );
     }
@@ -1537,7 +1626,8 @@ mod tests {
                     block(vec![Stmt::Expr(call("print", vec![int(1)]))], None),
                     None
                 ))],
-                expr: Some(int(2))
+                expr: Some(int(2)),
+                type_names: vec![]
             })
         );
     }
@@ -1554,7 +1644,8 @@ mod tests {
                     value: bin(Add, var("x"), int(1)),
                     pos: NO_POS
                 }],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -1571,7 +1662,8 @@ mod tests {
                     value: int(1),
                     pos: NO_POS
                 }],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -1597,7 +1689,8 @@ mod tests {
                         pos: NO_POS
                     }
                 ],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
         for (input, op) in [("x += 1;", Add), ("x *= 1;", Mul), ("x /= 1;", Div)] {
@@ -1633,7 +1726,8 @@ mod tests {
             parse_program("while c {} 1"),
             Ok(Program {
                 stmts: vec![Stmt::Expr(while_expr(var("c"), block(vec![], None)))],
-                expr: Some(int(1))
+                expr: Some(int(1)),
+                type_names: vec![]
             })
         );
     }
@@ -1695,7 +1789,8 @@ mod tests {
                     int(3),
                     block(vec![], None)
                 ))],
-                expr: Some(int(1))
+                expr: Some(int(1)),
+                type_names: vec![]
             })
         );
     }
@@ -1711,7 +1806,8 @@ mod tests {
                     Type::Int,
                     block(vec![], Some(bin(Add, var("a"), var("b"))))
                 )],
-                expr: Some(call("add", vec![int(1), int(2)]))
+                expr: Some(call("add", vec![int(1), int(2)])),
+                type_names: vec![]
             })
         );
     }
@@ -1722,7 +1818,8 @@ mod tests {
             parse_program("fn zero() -> int { 0 }"),
             Ok(Program {
                 stmts: vec![fn_decl("zero", &[], Type::Int, block(vec![], Some(int(0))))],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -1738,7 +1835,8 @@ mod tests {
                     Type::Int,
                     block(vec![Stmt::Expr(ret(Some(int(1))))], None)
                 )],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -1754,7 +1852,8 @@ mod tests {
                     Type::Unit,
                     block(vec![], Some(ret(None)))
                 )],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -1770,7 +1869,8 @@ mod tests {
                     Type::Int,
                     block(vec![Stmt::Expr(ret(Some(bin(Add, int(1), int(2)))))], None)
                 )],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -1838,7 +1938,8 @@ mod tests {
                     Type::Int,
                     block(vec![], Some(call("f", vec![var("x")])))
                 )],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -1858,8 +1959,77 @@ mod tests {
             parse_program("fn f(mut n: int, m: int) {}"),
             Ok(Program {
                 stmts: vec![Stmt::Fn(expected)],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
+        );
+    }
+
+    #[test]
+    fn struct_declaration() {
+        let field = |name: &str, ty| Field {
+            name: name.to_string(),
+            ty,
+            pos: NO_POS,
+        };
+        assert_eq!(
+            parse_program("struct P { x: int, kids: [P] } struct E {}"),
+            Ok(Program {
+                stmts: vec![
+                    Stmt::Struct(StructDecl {
+                        name: "P".to_string(),
+                        pos: NO_POS,
+                        fields: vec![
+                            field("x", Type::Int),
+                            field("kids", Type::Array(Box::new(Type::Struct("P".to_string())))),
+                        ],
+                    }),
+                    Stmt::Struct(StructDecl {
+                        name: "E".to_string(),
+                        pos: NO_POS,
+                        fields: vec![],
+                    }),
+                ],
+                expr: None,
+                type_names: vec![("P".to_string(), NO_POS)]
+            })
+        );
+    }
+
+    #[test]
+    fn struct_literal() {
+        assert_eq!(
+            parse("P { y: a + 1, x: [Q {}] }"),
+            Ok(literal(
+                "P",
+                vec![
+                    ("y", bin(Add, var("a"), int(1))),
+                    ("x", array(vec![literal("Q", vec![])]))
+                ]
+            ))
+        );
+    }
+
+    #[test]
+    fn struct_literal_in_condition_needs_parentheses() {
+        assert_eq!(
+            parse("if x == (P {}) { P {} }"),
+            Ok(if_expr(
+                bin(Eq, var("x"), literal("P", vec![])),
+                block(vec![], Some(literal("P", vec![]))),
+                None
+            ))
+        );
+        assert_eq!(
+            parse("while f(P {}) {}"),
+            Ok(while_expr(
+                call("f", vec![literal("P", vec![])]),
+                block(vec![], None)
+            ))
+        );
+        assert_eq!(
+            parse("if x {}"),
+            Ok(if_expr(var("x"), block(vec![], None), None))
         );
     }
 
@@ -1991,12 +2161,36 @@ mod tests {
     }
 
     #[test]
+    fn struct_parts_are_located() {
+        let source = "struct P {\n  x: [Q] }\nlet p: fn(R) = P {\n  x: [] };";
+        let program = Parser::new(tokenize(source).unwrap()).parse().unwrap();
+        assert_eq!(
+            program.type_names,
+            [
+                ("Q".to_string(), Pos { line: 2, col: 7 }),
+                ("R".to_string(), Pos { line: 3, col: 11 })
+            ]
+        );
+        let [Stmt::Struct(decl), Stmt::Let { value, .. }] = &program.stmts[..] else {
+            panic!("expected a struct and a let");
+        };
+        assert_eq!(decl.pos, Pos { line: 1, col: 8 });
+        assert_eq!(decl.fields[0].pos, Pos { line: 2, col: 3 });
+        assert_eq!(value.pos, Pos { line: 3, col: 16 });
+        let ExprKind::Struct { fields, .. } = &value.kind else {
+            panic!("expected a struct literal");
+        };
+        assert_eq!(fields[0].1, Pos { line: 4, col: 3 });
+    }
+
+    #[test]
     fn empty_program() {
         assert_eq!(
             parse_program(""),
             Ok(Program {
                 stmts: vec![],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -2007,7 +2201,8 @@ mod tests {
             parse_program("let x = 1 + 2;"),
             Ok(Program {
                 stmts: vec![let_stmt("x", bin(Add, int(1), int(2)))],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -2024,7 +2219,8 @@ mod tests {
                     value: int(1),
                     pos: NO_POS
                 }],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -2041,7 +2237,8 @@ mod tests {
                     value: array(vec![]),
                     pos: NO_POS
                 }],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -2052,7 +2249,8 @@ mod tests {
             parse_program("let x = 1; let y = x; y"),
             Ok(Program {
                 stmts: vec![let_stmt("x", int(1)), let_stmt("y", var("x"))],
-                expr: Some(var("y"))
+                expr: Some(var("y")),
+                type_names: vec![]
             })
         );
     }
@@ -2063,7 +2261,8 @@ mod tests {
             parse_program("1 + 2;"),
             Ok(Program {
                 stmts: vec![Stmt::Expr(bin(Add, int(1), int(2)))],
-                expr: None
+                expr: None,
+                type_names: vec![]
             })
         );
     }
@@ -2078,7 +2277,8 @@ mod tests {
                     let_stmt("x", int(2)),
                     Stmt::Expr(var("x")),
                 ],
-                expr: Some(bin(Add, var("x"), int(1)))
+                expr: Some(bin(Add, var("x"), int(1))),
+                type_names: vec![]
             })
         );
     }
@@ -2104,6 +2304,10 @@ mod tests {
         assert_eq!(
             ParseErrorKind::NestedFn.to_string(),
             "functions can only be declared at the top level"
+        );
+        assert_eq!(
+            ParseErrorKind::NestedStruct.to_string(),
+            "structs can only be declared at the top level"
         );
         assert_eq!(
             ParseErrorKind::ReturnOutsideFn.to_string(),
@@ -2490,18 +2694,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_type() {
-        assert_eq!(
-            parse_program("fn f(a: string) {}"),
-            Err(at(ParseErrorKind::UnknownType("string".to_string()), 1, 9))
-        );
-        assert_eq!(
-            ParseErrorKind::UnknownType("string".to_string()).to_string(),
-            "unknown type: string"
-        );
-    }
-
-    #[test]
     fn return_type_after_arrow() {
         assert_eq!(
             parse_program("fn f() -> {}"),
@@ -2733,6 +2925,73 @@ mod tests {
         assert_eq!(
             parse_program("for i in 0..break {}"),
             Err(at(ParseErrorKind::BreakOutsideLoop, 1, 13))
+        );
+    }
+
+    #[test]
+    fn nested_struct() {
+        assert_eq!(
+            parse_program("{ struct S {} }"),
+            Err(at(ParseErrorKind::NestedStruct, 1, 3))
+        );
+        assert_eq!(
+            parse_program("fn f() { struct S {} }"),
+            Err(at(ParseErrorKind::NestedStruct, 1, 10))
+        );
+    }
+
+    #[test]
+    fn struct_declaration_errors() {
+        assert_eq!(
+            parse_program("struct {}"),
+            Err(at(
+                expected("struct name after 'struct'", Token::LBrace),
+                1,
+                8
+            ))
+        );
+        assert_eq!(
+            parse_program("struct S ( x: int )"),
+            Err(at(expected("'{'", Token::LParen), 1, 10))
+        );
+        assert_eq!(
+            parse_program("struct S { x }"),
+            Err(at(expected("':'", Token::RBrace), 1, 14))
+        );
+        assert_eq!(
+            parse_program("struct S { x: int"),
+            Err(at(expected("',' or '}'", Token::Eof), 1, 18))
+        );
+        assert_eq!(
+            parse_program("struct S { x: int, }"),
+            Err(at(expected("field name", Token::RBrace), 1, 20))
+        );
+    }
+
+    #[test]
+    fn recovery_stops_at_struct() {
+        assert_eq!(
+            errors("let x = 1 struct {}"),
+            [
+                "1:11: expected ';', found 'struct'",
+                "1:18: expected struct name after 'struct', found '{'"
+            ]
+        );
+    }
+
+    #[test]
+    fn struct_literal_errors() {
+        assert_eq!(
+            parse_program("P { x: 1;"),
+            Err(at(expected("',' or '}'", Token::Semicolon), 1, 9))
+        );
+        assert_eq!(
+            errors("P { 1 }"),
+            ["1:5: expected field name, found '1'", "1:7: unexpected '}'"]
+        );
+        assert_eq!(
+            parse_program("if p == P { x: 1 } {}"),
+            Err(at(expected("'}'", Token::Colon), 1, 14))
         );
     }
 }

@@ -15,6 +15,7 @@ pub enum Token {
     For,
     In,
     Fn,
+    Struct,
     Return,
     Break,
     Continue,
@@ -68,6 +69,7 @@ impl fmt::Display for Token {
             Token::For => write!(f, "for"),
             Token::In => write!(f, "in"),
             Token::Fn => write!(f, "fn"),
+            Token::Struct => write!(f, "struct"),
             Token::Return => write!(f, "return"),
             Token::Break => write!(f, "break"),
             Token::Continue => write!(f, "continue"),
@@ -219,6 +221,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
                     "for" => Token::For,
                     "in" => Token::In,
                     "fn" => Token::Fn,
+                    "struct" => Token::Struct,
                     "return" => Token::Return,
                     "break" => Token::Break,
                     "continue" => Token::Continue,
@@ -438,6 +441,14 @@ mod tests {
         assert_eq!(
             tokens("fn fun"),
             Ok(vec![Token::Fn, ident("fun"), Token::Eof])
+        );
+    }
+
+    #[test]
+    fn struct_keyword() {
+        assert_eq!(
+            tokens("struct structure"),
+            Ok(vec![Token::Struct, ident("structure"), Token::Eof])
         );
     }
 

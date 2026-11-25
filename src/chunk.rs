@@ -3,6 +3,7 @@ use std::rc::Rc;
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::compiler::Scope;
 use crate::lexer::Pos;
+use crate::value::StructDef;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Op {
@@ -26,11 +27,26 @@ pub enum Op {
     Len,
     Bytes,
     Array(usize),
+    // Takes the field values in the order of the literal; `fields` gives
+    // the place of each one in the struct.
+    Struct {
+        def: Rc<StructDef>,
+        fields: Vec<usize>,
+    },
     Index,
     // Each flag tells whether that bound is on the stack.
-    Slice { start: bool, end: bool },
-    SetIndex { slot: usize, depth: usize },
-    Push { slot: usize, depth: usize },
+    Slice {
+        start: bool,
+        end: bool,
+    },
+    SetIndex {
+        slot: usize,
+        depth: usize,
+    },
+    Push {
+        slot: usize,
+        depth: usize,
+    },
 }
 
 #[derive(Debug, Default, PartialEq)]

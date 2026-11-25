@@ -61,6 +61,12 @@ pub enum ExprKind {
         rest: Vec<(LogicalOp, Pos, Expr)>,
     },
     Array(Vec<Expr>),
+    // `Point { x: 1, y: 2 }`, located at the struct name. Each field keeps
+    // the position of its name.
+    Struct {
+        name: String,
+        fields: Vec<(String, Pos, Expr)>,
+    },
     // `a[i][j]` is one node, for the same reason as `Binary`. Each index keeps
     // the position of its `[`.
     Index {
@@ -165,6 +171,7 @@ pub enum Type {
     Error,
     Array(Box<Type>),
     Fn { params: Vec<Type>, ret: Box<Type> },
+    Struct(String),
 }
 
 impl fmt::Display for Type {
@@ -191,6 +198,7 @@ impl fmt::Display for Type {
                 }
                 Ok(())
             }
+            Type::Struct(name) => write!(f, "{name}"),
         }
     }
 }
@@ -222,6 +230,20 @@ impl FnDecl {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    pub name: String,
+    pub ty: Type,
+    pub pos: Pos,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDecl {
+    pub name: String,
+    pub pos: Pos,
+    pub fields: Vec<Field>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Let {
         name: String,
@@ -239,6 +261,7 @@ pub enum Stmt {
         pos: Pos,
     },
     Fn(FnDecl),
+    Struct(StructDecl),
     Expr(Expr),
 }
 
@@ -246,4 +269,7 @@ pub enum Stmt {
 pub struct Program {
     pub stmts: Vec<Stmt>,
     pub expr: Option<Expr>,
+    // Each struct name written in a type, such as `Point` in `[Point]`, so
+    // that the checker can report an unknown one where it is written.
+    pub type_names: Vec<(String, Pos)>,
 }

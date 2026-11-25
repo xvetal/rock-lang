@@ -42,6 +42,19 @@ pub enum CheckErrorKind {
     NotArray(Type),
     PushToValue,
     NotIterable(Type),
+    UnknownType(String),
+    BuiltinType(String),
+    DuplicateStruct(String),
+    DuplicateField(String),
+    RecursiveStruct(String),
+    MissingField {
+        field: String,
+        name: String,
+    },
+    UnknownField {
+        field: String,
+        name: String,
+    },
 }
 
 impl CheckErrorKind {
@@ -83,6 +96,17 @@ impl fmt::Display for CheckErrorKind {
             }
             CheckErrorKind::NotIterable(ty) => {
                 write!(f, "cannot iterate over a value of type {ty}")
+            }
+            CheckErrorKind::UnknownType(name) => write!(f, "unknown type: {name}"),
+            CheckErrorKind::BuiltinType(name) => write!(f, "{name} is a built-in type"),
+            CheckErrorKind::DuplicateStruct(name) => write!(f, "duplicate struct: {name}"),
+            CheckErrorKind::DuplicateField(field) => write!(f, "duplicate field: {field}"),
+            CheckErrorKind::RecursiveStruct(name) => write!(f, "recursive struct: {name}"),
+            CheckErrorKind::MissingField { field, name } => {
+                write!(f, "missing field {field} in {name}")
+            }
+            CheckErrorKind::UnknownField { field, name } => {
+                write!(f, "unknown field {field} in {name}")
             }
         }
     }
@@ -127,6 +151,14 @@ impl fmt::Display for WarningKind {
 pub struct Env {
     locals: Vec<Local>,
     functions: Vec<(String, Type)>,
+    structs: Vec<StructInfo>,
+}
+
+#[derive(Debug, Clone)]
+struct StructInfo {
+    name: String,
+    fields: Vec<(String, Type)>,
+    pos: Pos,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +203,7 @@ pub struct Checked {
 }
 
 pub fn check(program: &Program, env: &Env) -> Checked {
+    let (structs, struct_errors) = declare_structs(program, env);
     let decls: Vec<&FnDecl> = program
         .stmts
         .iter()
@@ -180,9 +213,14 @@ pub fn check(program: &Program, env: &Env) -> Checked {
         })
         .collect();
     let mut functions = env.functions.clone();
-    functions.extend(decls.iter().map(|decl| (decl.name.clone(), decl.ty())));
+    functions.extend(
+        decls
+            .iter()
+            .map(|decl| (decl.name.clone(), resolve(&decl.ty(), &structs))),
+    );
 
-    let mut checker = Checker::new(&functions, env.locals.clone(), Type::Unit);
+    let mut checker = Checker::new(&functions, &structs, env.locals.clone(), Type::Unit);
+    checker.errors.extend(struct_errors);
     for (i, decl) in decls.iter().enumerate() {
         if decls[..i].iter().any(|other| other.name == decl.name) {
             checker.error(
@@ -205,10 +243,115 @@ pub fn check(program: &Program, env: &Env) -> Checked {
     } = checker;
     errors.sort_by_key(|e| e.pos);
     Checked {
-        env: Env { locals, functions },
+        env: Env {
+            locals,
+            functions,
+            structs,
+        },
         errors,
         warnings,
     }
+}
+
+// Adds the structs declared in `program` to those in `env`. A struct can be
+// used before its declaration, so names in types are resolved only after
+// all of them are known.
+fn declare_structs(program: &Program, env: &Env) -> (Vec<StructInfo>, Vec<CheckError>) {
+    let mut structs = env.structs.clone();
+    let mut errors = Vec::new();
+    for stmt in &program.stmts {
+        let Stmt::Struct(decl) = stmt else {
+            continue;
+        };
+        for (i, field) in decl.fields.iter().enumerate() {
+            if decl.fields[..i]
+                .iter()
+                .any(|other| other.name == field.name)
+            {
+                errors.push(CheckErrorKind::DuplicateField(field.name.clone()).at(field.pos));
+            }
+        }
+        let name = decl.name.clone();
+        if ["int", "bool", "str"].contains(&name.as_str()) {
+            errors.push(CheckErrorKind::BuiltinType(name).at(decl.pos));
+        } else if structs.iter().any(|s| s.name == name) {
+            errors.push(CheckErrorKind::DuplicateStruct(name).at(decl.pos));
+        } else {
+            let fields = decl
+                .fields
+                .iter()
+                .map(|field| (field.name.clone(), field.ty.clone()))
+                .collect();
+            structs.push(StructInfo {
+                name,
+                fields,
+                pos: decl.pos,
+            });
+        }
+    }
+    for (name, pos) in &program.type_names {
+        if !structs.iter().any(|s| &s.name == name) {
+            errors.push(CheckErrorKind::UnknownType(name.clone()).at(*pos));
+        }
+    }
+    let new = env.structs.len();
+    for i in new..structs.len() {
+        let fields = structs[i]
+            .fields
+            .iter()
+            .map(|(name, ty)| (name.clone(), resolve(ty, &structs)))
+            .collect();
+        structs[i].fields = fields;
+    }
+    for info in &structs[new..] {
+        let mut seen = Vec::new();
+        let recursive = info
+            .fields
+            .iter()
+            .any(|(_, ty)| holds(ty, &info.name, &structs, &mut seen));
+        if recursive {
+            errors.push(CheckErrorKind::RecursiveStruct(info.name.clone()).at(info.pos));
+        }
+    }
+    (structs, errors)
+}
+
+// An unknown struct name is reported where it is written, so here it
+// becomes `Error`, which fits any type.
+fn resolve(ty: &Type, structs: &[StructInfo]) -> Type {
+    match ty {
+        Type::Struct(name) if !structs.iter().any(|s| &s.name == name) => Type::Error,
+        Type::Array(element) => Type::Array(Box::new(resolve(element, structs))),
+        Type::Fn { params, ret } => Type::Fn {
+            params: params.iter().map(|p| resolve(p, structs)).collect(),
+            ret: Box::new(resolve(ret, structs)),
+        },
+        ty => ty.clone(),
+    }
+}
+
+// Whether a value of type `ty` contains a `target` struct other than through
+// an array. Such a struct could never be built. `seen` keeps a cycle that
+// does not pass through `target` from repeating forever.
+fn holds(ty: &Type, target: &str, structs: &[StructInfo], seen: &mut Vec<String>) -> bool {
+    let Type::Struct(name) = ty else {
+        return false;
+    };
+    if name == target {
+        return true;
+    }
+    if seen.contains(name) {
+        return false;
+    }
+    seen.push(name.clone());
+    structs
+        .iter()
+        .find(|s| &s.name == name)
+        .is_some_and(|info| {
+            info.fields
+                .iter()
+                .any(|(_, ty)| holds(ty, target, structs, seen))
+        })
 }
 
 // Warnings for top-level variables, once no more code can use them.
@@ -247,10 +390,20 @@ fn has_empty_array(ty: &Type) -> bool {
     }
 }
 
-fn comparable(ty: &Type) -> bool {
+// `seen` holds the structs already being checked, as a struct can contain
+// itself through an array.
+fn comparable(ty: &Type, structs: &[StructInfo], seen: &mut Vec<String>) -> bool {
     match ty {
         Type::Fn { .. } => false,
-        Type::Array(element) => comparable(element),
+        Type::Array(element) => comparable(element, structs, seen),
+        Type::Struct(name) if !seen.contains(name) => {
+            seen.push(name.clone());
+            structs.iter().find(|s| &s.name == name).is_none_or(|info| {
+                info.fields
+                    .iter()
+                    .all(|(_, ty)| comparable(ty, structs, seen))
+            })
+        }
         _ => true,
     }
 }
@@ -261,6 +414,7 @@ const BUILTINS: [&str; 4] = ["print", "len", "push", "bytes"];
 
 struct Checker<'a> {
     functions: &'a [(String, Type)],
+    structs: &'a [StructInfo],
     locals: Vec<Local>,
     ret: Type,
     diverges: bool,
@@ -269,9 +423,15 @@ struct Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
-    fn new(functions: &'a [(String, Type)], locals: Vec<Local>, ret: Type) -> Self {
+    fn new(
+        functions: &'a [(String, Type)],
+        structs: &'a [StructInfo],
+        locals: Vec<Local>,
+        ret: Type,
+    ) -> Self {
         Self {
             functions,
+            structs,
             locals,
             ret,
             diverges: false,
@@ -308,11 +468,12 @@ impl<'a> Checker<'a> {
         let params = decl
             .params
             .iter()
-            .map(|p| Local::new(&p.name, p.ty.clone(), p.mutable, p.pos))
+            .map(|p| Local::new(&p.name, resolve(&p.ty, self.structs), p.mutable, p.pos))
             .collect();
-        let mut body = Checker::new(self.functions, params, decl.ret.clone());
+        let ret = resolve(&decl.ret, self.structs);
+        let mut body = Checker::new(self.functions, self.structs, params, ret.clone());
         let ty = body.block(&decl.body);
-        body.expect(&decl.ret, &ty, block_value_pos(&decl.body, decl.pos));
+        body.expect(&ret, &ty, block_value_pos(&decl.body, decl.pos));
         body.end_scope(0);
         self.errors.extend(body.errors);
         self.warnings.extend(body.warnings);
@@ -331,8 +492,9 @@ impl<'a> Checker<'a> {
                     let found = self.expr(value);
                     let ty = match ty {
                         Some(ty) => {
-                            self.expect(ty, &found, value_pos(value));
-                            ty.clone()
+                            let ty = resolve(ty, self.structs);
+                            self.expect(&ty, &found, value_pos(value));
+                            ty
                         }
                         None if has_empty_array(&found) => {
                             self.error(CheckErrorKind::EmptyArray, value_pos(value))
@@ -365,7 +527,7 @@ impl<'a> Checker<'a> {
                 Stmt::Expr(expr) => {
                     self.expr(expr);
                 }
-                Stmt::Fn(_) => {}
+                Stmt::Fn(_) | Stmt::Struct(_) => {}
             }
         }
     }
@@ -459,6 +621,7 @@ impl<'a> Checker<'a> {
                 }
                 Type::Array(Box::new(ty))
             }
+            ExprKind::Struct { name, fields } => self.struct_literal(name, fields, pos),
             ExprKind::Index { target, indexes } => {
                 let ty = self.expr(target);
                 self.index(ty, value_pos(target), indexes)
@@ -530,6 +693,41 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn struct_literal(&mut self, name: &str, fields: &[(String, Pos, Expr)], pos: Pos) -> Type {
+        let structs = self.structs;
+        let Some(info) = structs.iter().find(|s| s.name == name) else {
+            self.error(CheckErrorKind::UnknownType(name.to_string()), pos);
+            for (_, _, value) in fields {
+                self.expr(value);
+            }
+            return Type::Error;
+        };
+        for (i, (field, field_pos, value)) in fields.iter().enumerate() {
+            let found = self.expr(value);
+            if fields[..i].iter().any(|(other, _, _)| other == field) {
+                self.error(CheckErrorKind::DuplicateField(field.clone()), *field_pos);
+            } else if let Some((_, ty)) = info.fields.iter().find(|(n, _)| n == field) {
+                self.expect(ty, &found, value_pos(value));
+            } else {
+                let kind = CheckErrorKind::UnknownField {
+                    field: field.clone(),
+                    name: name.to_string(),
+                };
+                self.error(kind, *field_pos);
+            }
+        }
+        for (field, _) in &info.fields {
+            if !fields.iter().any(|(given, _, _)| given == field) {
+                let kind = CheckErrorKind::MissingField {
+                    field: field.clone(),
+                    name: name.to_string(),
+                };
+                self.error(kind, pos);
+            }
+        }
+        Type::Struct(name.to_string())
+    }
+
     fn call(&mut self, name: &str, callee: Type, args: &[Expr], pos: Pos) -> Type {
         let Type::Fn { params, ret } = callee else {
             if callee != Type::Error {
@@ -572,7 +770,7 @@ impl<'a> Checker<'a> {
         let right_ty = self.expr(right);
         if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
             let ty = self.join(left_ty, right_ty, value_pos(right));
-            if !comparable(&ty) {
+            if !comparable(&ty, self.structs, &mut Vec::new()) {
                 self.error(CheckErrorKind::CannotCompare(ty), pos);
             }
             return Type::Bool;
@@ -824,6 +1022,11 @@ mod tests {
             "let mut x = 10; x += 1; x -= 2; x *= 3; x /= 4; x %= 5; x",
             r#"let mut s = "a"; s += "b" + s; s"#,
             r#"let mut a = [["a"]]; a[0][0] += "b"; let mut n = [1]; n[0] *= len(a); n"#,
+            "struct P { x: int, y: int } P { y: 1, x: 2 } == P { x: 2, y: 1 }",
+            r#"let t = T { kids: [T { kids: [], name: "a" }], name: "b" }; struct T { kids: [T], name: str } t == t"#,
+            "struct P { x: int } fn f(p: P) -> [P] { [p, P { x: 1 }] } f(P { x: 0 })",
+            "struct E {} let e: E = E {}; if e == (E {}) { print(e); }",
+            "struct A { b: B } struct B { f: fn(A) -> A } fn g(a: A) -> A { a } A { b: B { f: g } }",
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
         }
@@ -1408,6 +1611,75 @@ mod tests {
         assert_eq!(
             error("let mut a = [1]; a[true] += 2; a"),
             "1:20: expected int, found bool"
+        );
+    }
+
+    #[test]
+    fn struct_declaration_errors() {
+        assert_eq!(error("struct int {}"), "1:8: int is a built-in type");
+        assert_eq!(
+            error("struct P {} struct P { x: int }"),
+            "1:20: duplicate struct: P"
+        );
+        assert_eq!(
+            error("struct P { x: int, x: bool }"),
+            "1:20: duplicate field: x"
+        );
+        assert_eq!(error("struct A { a: A }"), "1:8: recursive struct: A");
+        assert_eq!(
+            errors("struct B { c: C } struct C { b: [B], c: B }"),
+            ["1:8: recursive struct: B", "1:26: recursive struct: C"]
+        );
+    }
+
+    #[test]
+    fn unknown_types() {
+        assert_eq!(error("fn f(a: string) {}"), "1:9: unknown type: string");
+        assert_eq!(
+            errors("struct P { q: [Q] } let p: fn(R) -> P = f; fn f(r: R) -> P { P { q: [] } } p"),
+            [
+                "1:16: unknown type: Q",
+                "1:31: unknown type: R",
+                "1:52: unknown type: R"
+            ]
+        );
+        assert_eq!(error("let a: Foo = 1; a"), "1:8: unknown type: Foo");
+    }
+
+    #[test]
+    fn struct_literal_errors() {
+        assert_eq!(
+            errors(r#"struct P { x: int, y: str } P { x: "a", z: 1, x: 2 }"#),
+            [
+                "1:29: missing field y in P",
+                "1:36: expected int, found str",
+                "1:41: unknown field z in P",
+                "1:47: duplicate field: x"
+            ]
+        );
+        assert_eq!(
+            errors("struct P { x: int, y: int } P {}"),
+            ["1:29: missing field x in P", "1:29: missing field y in P"]
+        );
+        assert_eq!(
+            errors("Nope { a: 1 + true }"),
+            ["1:1: unknown type: Nope", "1:15: expected int, found bool"]
+        );
+        assert_eq!(
+            error("struct P { x: int } let p: P = 1; p"),
+            "1:32: expected P, found int"
+        );
+    }
+
+    #[test]
+    fn struct_comparison_errors() {
+        assert_eq!(
+            error("struct P { f: fn() } fn g() {} P { f: g } == P { f: g }"),
+            "1:43: cannot compare values of type P"
+        );
+        assert_eq!(
+            errors("struct P {} P {} < P {}"),
+            ["1:13: expected int, found P", "1:20: expected int, found P"]
         );
     }
 }
