@@ -74,7 +74,7 @@ fn repl() {
             continue;
         }
 
-        report(run(&mut vm, &mut env, &mut scope, &line));
+        let _ = report(run(&mut vm, &mut env, &mut scope, &line));
     }
 }
 
