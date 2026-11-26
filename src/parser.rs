@@ -360,8 +360,12 @@ impl Parser {
             ExprKind::Access { target, path } => (*target, path),
             _ => (target, Vec::new()),
         };
-        let ExprKind::Var(name) = var.kind else {
-            return Err(ParseErrorKind::Unexpected(token).at(op_pos));
+        let field = path
+            .iter()
+            .any(|(_, step)| matches!(step, Access::Field(_)));
+        let name = match var.kind {
+            ExprKind::Var(name) if !field => name,
+            _ => return Err(ParseErrorKind::Unexpected(token).at(op_pos)),
         };
         let value = self.expr()?;
         self.expect(Token::Semicolon, "';'")?;
@@ -496,11 +500,22 @@ impl Parser {
             return Ok(target);
         }
         let mut path = Vec::new();
-        while self.peek() == &Token::LBracket {
-            let pos = self.peek_pos();
-            self.advance();
-            path.push((pos, self.with_struct_literals(true, Self::index)?));
-            self.expect(Token::RBracket, "']'")?;
+        loop {
+            match self.peek() {
+                Token::LBracket => {
+                    let pos = self.peek_pos();
+                    self.advance();
+                    path.push((pos, self.with_struct_literals(true, Self::index)?));
+                    self.expect(Token::RBracket, "']'")?;
+                }
+                Token::Dot => {
+                    self.advance();
+                    let pos = self.peek_pos();
+                    let name = self.ident("field name after '.'")?;
+                    path.push((pos, Access::Field(name)));
+                }
+                _ => break,
+            }
         }
         Ok(match path.last() {
             Some(&(pos, _)) => ExprKind::Access {
@@ -913,6 +928,7 @@ mod tests {
             match step {
                 Access::Index(index) => strip(index),
                 Access::Slice { start, end } => start.iter_mut().chain(end).for_each(strip),
+                Access::Field(_) => {}
             }
         }
     }
@@ -1046,6 +1062,10 @@ mod tests {
 
     fn slice(start: Option<Expr>, end: Option<Expr>) -> Access {
         Access::Slice { start, end }
+    }
+
+    fn field(name: &str) -> Access {
+        Access::Field(name.to_string())
     }
 
     fn neg(operand: Expr) -> Expr {
@@ -1405,6 +1425,36 @@ mod tests {
     #[test]
     fn indexing_binds_tighter_than_unary_minus() {
         assert_eq!(parse("-a[0]"), Ok(neg(index(var("a"), vec![int(0)]))));
+    }
+
+    #[test]
+    fn field_access() {
+        assert_eq!(parse("p.x"), Ok(accessed(var("p"), vec![field("x")])));
+        assert_eq!(
+            parse("a[0].x[1..]"),
+            Ok(accessed(
+                var("a"),
+                vec![Access::Index(int(0)), field("x"), slice(Some(int(1)), None)]
+            ))
+        );
+        assert_eq!(
+            parse("-f().x"),
+            Ok(neg(accessed(call("f", vec![]), vec![field("x")])))
+        );
+        assert_eq!(
+            parse("P {}.x"),
+            Ok(accessed(literal("P", vec![]), vec![field("x")]))
+        );
+        assert_eq!(
+            parse("s[p.x..p.y]"),
+            Ok(accessed(
+                var("s"),
+                vec![slice(
+                    Some(accessed(var("p"), vec![field("x")])),
+                    Some(accessed(var("p"), vec![field("y")]))
+                )]
+            ))
+        );
     }
 
     #[test]
@@ -2095,6 +2145,20 @@ mod tests {
         assert_eq!(expr.pos, Pos { line: 2, col: 3 });
         let ExprKind::Access { path, .. } = expr.kind else {
             panic!("expected an index expression");
+        };
+        let positions: Vec<Pos> = path.iter().map(|(pos, _)| *pos).collect();
+        assert_eq!(
+            positions,
+            [Pos { line: 1, col: 2 }, Pos { line: 2, col: 3 }]
+        );
+    }
+
+    #[test]
+    fn field_is_located_at_its_name() {
+        let expr = parse_located("a[0].\n  x");
+        assert_eq!(expr.pos, Pos { line: 2, col: 3 });
+        let ExprKind::Access { path, .. } = expr.kind else {
+            panic!("expected an access expression");
         };
         let positions: Vec<Pos> = path.iter().map(|(pos, _)| *pos).collect();
         assert_eq!(
@@ -2995,6 +3059,30 @@ mod tests {
         assert_eq!(
             parse_program("if p == P { x: 1 } {}"),
             Err(at(expected("'}'", Token::Colon), 1, 14))
+        );
+    }
+
+    #[test]
+    fn field_errors() {
+        assert_eq!(
+            parse_program("p."),
+            Err(at(expected("field name after '.'", Token::Eof), 1, 3))
+        );
+        assert_eq!(
+            parse_program("p.1;"),
+            Err(at(expected("field name after '.'", Token::Int(1)), 1, 3))
+        );
+        assert_eq!(
+            parse_program("p.x = 1;"),
+            Err(at(ParseErrorKind::Unexpected(Token::Eq), 1, 5))
+        );
+        assert_eq!(
+            parse_program("a[0].x += 1;"),
+            Err(at(ParseErrorKind::Unexpected(Token::PlusEq), 1, 8))
+        );
+        assert_eq!(
+            parse_program("p.f(1);"),
+            Err(at(ParseErrorKind::Unexpected(Token::LParen), 1, 4))
         );
     }
 }

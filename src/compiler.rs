@@ -3,6 +3,7 @@ use std::rc::Rc;
 use crate::ast::{
     Access, BinaryOp, Block, Expr, ExprKind, FnDecl, Iterable, LogicalOp, Program, Stmt,
 };
+use crate::checker::Fields;
 use crate::chunk::{Bytecode, Chunk, Function, Op};
 use crate::lexer::Pos;
 use crate::value::StructDef;
@@ -14,7 +15,7 @@ pub struct Scope {
     structs: Vec<Rc<StructDef>>,
 }
 
-pub fn compile(program: &Program, scope: &Scope) -> Bytecode {
+pub fn compile(program: &Program, fields: &Fields, scope: &Scope) -> Bytecode {
     let decls: Vec<&FnDecl> = program
         .stmts
         .iter()
@@ -35,10 +36,10 @@ pub fn compile(program: &Program, scope: &Scope) -> Bytecode {
     }));
     let functions = decls
         .iter()
-        .map(|decl| function(decl, &names, &structs))
+        .map(|decl| function(decl, &names, &structs, fields))
         .collect();
 
-    let mut compiler = Compiler::new(&names, &structs, scope.locals.clone());
+    let mut compiler = Compiler::new(&names, &structs, fields, scope.locals.clone());
     compiler.stmts(&program.stmts);
     if let Some(expr) = &program.expr {
         compiler.expr(expr);
@@ -59,9 +60,14 @@ pub fn compile(program: &Program, scope: &Scope) -> Bytecode {
     }
 }
 
-fn function(decl: &FnDecl, names: &[String], structs: &[Rc<StructDef>]) -> Rc<Function> {
+fn function(
+    decl: &FnDecl,
+    names: &[String],
+    structs: &[Rc<StructDef>],
+    fields: &Fields,
+) -> Rc<Function> {
     let params = decl.params.iter().map(|p| p.name.clone()).collect();
-    let mut compiler = Compiler::new(names, structs, params);
+    let mut compiler = Compiler::new(names, structs, fields, params);
     compiler.block(&decl.body, decl.pos);
     compiler.chunk.emit(Op::Return, decl.pos);
     Rc::new(Function {
@@ -75,6 +81,7 @@ const RESOLVED: &str = "the checker resolves every name";
 struct Compiler<'a> {
     functions: &'a [String],
     structs: &'a [Rc<StructDef>],
+    fields: &'a Fields,
     chunk: Chunk,
     locals: Vec<String>,
     temps: usize,
@@ -90,10 +97,16 @@ struct Loop {
 }
 
 impl<'a> Compiler<'a> {
-    fn new(functions: &'a [String], structs: &'a [Rc<StructDef>], locals: Vec<String>) -> Self {
+    fn new(
+        functions: &'a [String],
+        structs: &'a [Rc<StructDef>],
+        fields: &'a Fields,
+        locals: Vec<String>,
+    ) -> Self {
         Self {
             functions,
             structs,
+            fields,
             chunk: Chunk::default(),
             locals,
             temps: 0,
@@ -269,6 +282,7 @@ impl<'a> Compiler<'a> {
                                 end: end.is_some(),
                             }
                         }
+                        Access::Field(_) => Op::Field(*self.fields.get(pos).expect(RESOLVED)),
                     };
                     self.temps -= 1;
                     self.chunk.emit(op, *pos);
@@ -454,7 +468,7 @@ impl<'a> Compiler<'a> {
     fn place_indexes(&mut self, path: &[(Pos, Access)]) {
         for (_, step) in path {
             let Access::Index(index) = step else {
-                panic!("the checker rejects assignment to a slice");
+                panic!("the checker rejects assignment to a slice, the parser to a field");
             };
             self.expr(index);
             self.temps += 1;
@@ -475,7 +489,7 @@ impl<'a> Compiler<'a> {
     ) {
         for (bracket, step) in path {
             let Access::Index(index) = step else {
-                panic!("the checker rejects assignment to a slice");
+                panic!("the checker rejects assignment to a slice, the parser to a field");
             };
             self.expr(index);
             self.chunk.emit(Op::DefineLocal, *bracket);
@@ -565,8 +579,13 @@ mod tests {
 
     fn code(input: &str) -> Vec<Op> {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        assert_eq!(check(&program, &Env::default()).errors, []);
-        compile(&program, &Scope::default()).main.chunk.code.clone()
+        let checked = check(&program, &Env::default());
+        assert_eq!(checked.errors, []);
+        compile(&program, &checked.fields, &Scope::default())
+            .main
+            .chunk
+            .code
+            .clone()
     }
 
     #[test]
@@ -890,7 +909,7 @@ mod tests {
             Parser::new(tokenize("fn add(a: int, b: int) -> int { let c = a + b; c }").unwrap())
                 .parse()
                 .unwrap();
-        let bytecode = compile(&program, &Scope::default());
+        let bytecode = compile(&program, &Fields::new(), &Scope::default());
         assert_eq!(
             bytecode.functions[0].chunk.code,
             [
@@ -933,6 +952,26 @@ mod tests {
                     def,
                     fields: vec![1, 0]
                 }
+            ]
+        );
+    }
+
+    #[test]
+    fn field_is_read_by_place() {
+        let def = Rc::new(StructDef {
+            name: "P".to_string(),
+            fields: vec!["x".to_string(), "y".to_string()],
+        });
+        assert_eq!(
+            code("struct P { x: int, y: int } P { x: 1, y: 2 }.y"),
+            [
+                Op::Int(1),
+                Op::Int(2),
+                Op::Struct {
+                    def,
+                    fields: vec![0, 1]
+                },
+                Op::Field(1)
             ]
         );
     }
@@ -1059,7 +1098,7 @@ mod tests {
     #[test]
     fn positions_follow_code() {
         let program = Parser::new(tokenize("1 +\n  2").unwrap()).parse().unwrap();
-        let bytecode = compile(&program, &Scope::default());
+        let bytecode = compile(&program, &Fields::new(), &Scope::default());
         let positions: Vec<String> = bytecode
             .main
             .chunk

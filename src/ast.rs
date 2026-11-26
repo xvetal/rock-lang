@@ -67,8 +67,8 @@ pub enum ExprKind {
         name: String,
         fields: Vec<(String, Pos, Expr)>,
     },
-    // `a[i][j]` is one node, for the same reason as `Binary`. Each index keeps
-    // the position of its `[`.
+    // `a[i].x` is one node, for the same reason as `Binary`. Each step keeps
+    // the position of its `[` or of the field name.
     Access {
         target: Box<Expr>,
         path: Vec<(Pos, Access)>,
@@ -107,7 +107,7 @@ pub enum Iterable {
     Array(Box<Expr>),
 }
 
-// What stands between the brackets of `a[...]`.
+// One step of `a[i][j..].x`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Access {
     Index(Expr),
@@ -116,6 +116,7 @@ pub enum Access {
         start: Option<Expr>,
         end: Option<Expr>,
     },
+    Field(String),
 }
 
 impl Access {
@@ -123,6 +124,7 @@ impl Access {
         let (first, second) = match self {
             Access::Index(index) => (Some(index), None),
             Access::Slice { start, end } => (start.as_ref(), end.as_ref()),
+            Access::Field(_) => (None, None),
         };
         first.into_iter().chain(second)
     }
@@ -141,6 +143,12 @@ impl Expr {
             ExprKind::Access { target, path } => (&**target, &path[..]),
             _ => (self, &[][..]),
         };
+        if path
+            .iter()
+            .any(|(_, step)| matches!(step, Access::Field(_)))
+        {
+            return None;
+        }
         match &var.kind {
             ExprKind::Var(name) => Some(Place {
                 name,

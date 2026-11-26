@@ -49,6 +49,7 @@ pub enum Token {
     RBrace,
     LBracket,
     RBracket,
+    Dot,
     DotDot,
     Eof,
 }
@@ -103,13 +104,14 @@ impl fmt::Display for Token {
             Token::RBrace => write!(f, "}}"),
             Token::LBracket => write!(f, "["),
             Token::RBracket => write!(f, "]"),
+            Token::Dot => write!(f, "."),
             Token::DotDot => write!(f, ".."),
             Token::Eof => write!(f, "end of input"),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Pos {
     pub line: usize,
     pub col: usize,
@@ -186,6 +188,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Located>, String> {
             '[' => Token::LBracket,
             ']' => Token::RBracket,
             '.' if eat(&mut chars, &mut pos, '.') => Token::DotDot,
+            '.' => Token::Dot,
             '"' => Token::Str(string(&mut chars, &mut pos, start)?),
             '0'..='9' => {
                 let mut value = u64::from(c.to_digit(10).expect("c is an ASCII digit"));
@@ -579,7 +582,7 @@ mod tests {
                       == 6 != 7 < 8 <= 9 > 10 >= 11 && ! true || false ; \
                       x += 1 ; x -= 1 ; x *= 1 ; x /= 1 ; x %= 1 ; \
                       { } if x { } else { } while x { break ; continue } \
-                      fn f ( a : int ) -> int { return } [ ] [ .. ] \
+                      fn f ( a : int ) -> int { return } [ ] [ .. ] p . x \
                       \"a\\\"b\\\\c\\nd\\te\"";
         let tokens = tokens(source).unwrap();
         let printed: Vec<String> = tokens
@@ -618,6 +621,21 @@ mod tests {
                 Token::DotDot,
                 ident("n"),
                 Token::RBracket,
+                Token::Eof
+            ])
+        );
+    }
+
+    #[test]
+    fn dot() {
+        assert_eq!(
+            tokens("p.x..y"),
+            Ok(vec![
+                ident("p"),
+                Token::Dot,
+                ident("x"),
+                Token::DotDot,
+                ident("y"),
                 Token::Eof
             ])
         );
@@ -721,14 +739,6 @@ mod tests {
         assert_eq!(
             tokens("a & b"),
             Err("1:3: unexpected character: '&'".to_string())
-        );
-    }
-
-    #[test]
-    fn single_dot() {
-        assert_eq!(
-            tokens("a.len"),
-            Err("1:2: unexpected character: '.'".to_string())
         );
     }
 

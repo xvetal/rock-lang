@@ -171,6 +171,12 @@ impl<W: Write> Vm<W> {
                         })?;
                     self.stack.push(item.clone());
                 }
+                Op::Field(place) => {
+                    let Value::Struct(value) = self.pop() else {
+                        panic!("the checker only lets structs have fields");
+                    };
+                    self.stack.push(value.fields[place].clone());
+                }
                 Op::Slice { start, end } => {
                     let end = end.then(|| self.pop().as_int());
                     let start = start.then(|| self.pop().as_int());
@@ -235,8 +241,9 @@ mod tests {
 
     fn run(input: &str) -> (Result<Value, RuntimeError>, String) {
         let program = Parser::new(tokenize(input).unwrap()).parse().unwrap();
-        assert_eq!(check(&program, &Env::default()).errors, []);
-        let bytecode = compile(&program, &Scope::default());
+        let checked = check(&program, &Env::default());
+        assert_eq!(checked.errors, []);
+        let bytecode = compile(&program, &checked.fields, &Scope::default());
         let mut out = Vec::new();
         let result = Vm::new(&mut out).run(&bytecode);
         (result, String::from_utf8(out).unwrap())
@@ -266,7 +273,7 @@ mod tests {
                 if let Some(error) = checked.errors.first() {
                     return Err(error.to_string());
                 }
-                let bytecode = compile(&program, &scope);
+                let bytecode = compile(&program, &checked.fields, &scope);
                 let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
                 env = checked.env;
                 scope = bytecode.scope;
@@ -995,6 +1002,38 @@ mod tests {
                 Err("1:8: duplicate struct: P".to_string()),
                 Ok(Value::Unit),
                 Ok(Value::Bool(true)),
+            ]
+        );
+    }
+
+    #[test]
+    fn fields() {
+        assert_eq!(
+            output(
+                r#"struct P { x: int, y: int } struct Path { name: str, points: [P] }
+                   fn norm(p: P) -> int { p.x * p.x + p.y * p.y }
+                   let path = Path { name: "zigzag", points: [P { x: 1, y: 2 }, P { x: 3, y: 4 }] };
+                   print(path.points[1].x); print(norm(path.points[0]));
+                   print(path.name[..3]); print(-path.points[0].y);"#
+            ),
+            "3\n5\nzig\n-2\n"
+        );
+    }
+
+    #[test]
+    fn session_reads_fields() {
+        assert_eq!(
+            session(&[
+                "struct P { x: int, y: int }",
+                "let p = P { y: 2, x: 1 };",
+                "fn f(p: P) -> int { p.y }",
+                "p.x * 10 + f(p)"
+            ]),
+            [
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Ok(Value::Unit),
+                Ok(Value::Int(12)),
             ]
         );
     }

@@ -16,7 +16,7 @@ use std::process::ExitCode;
 use std::thread;
 
 use ast::Program;
-use checker::{CheckError, Checked, Env, Warning};
+use checker::{CheckError, Checked, Env, Fields, Warning};
 use compiler::Scope;
 use value::Value;
 use vm::Vm;
@@ -83,8 +83,8 @@ fn read(path: &str) -> Result<String, String> {
 }
 
 fn run_file(path: &str) -> Result<Value, Errors> {
-    let program = check_file(path)?;
-    let bytecode = compiler::compile(&program, &Scope::default());
+    let (program, fields) = check_file(path)?;
+    let bytecode = compiler::compile(&program, &fields, &Scope::default());
     let value = Vm::new(io::stdout())
         .run(&bytecode)
         .map_err(|e| e.to_string())?;
@@ -92,13 +92,13 @@ fn run_file(path: &str) -> Result<Value, Errors> {
 }
 
 // The whole file is known, so top-level variables get their warnings too.
-fn check_file(path: &str) -> Result<Program, Errors> {
+fn check_file(path: &str) -> Result<(Program, Fields), Errors> {
     let source = read(path)?;
     let (program, checked) = check(&source, &Env::default())?;
     let mut warnings = checked.warnings;
     warnings.extend(checker::finish(&checked.env));
     diagnose(checked.errors, warnings)?;
-    Ok(program)
+    Ok((program, checked.fields))
 }
 
 struct Errors(Vec<String>);
@@ -155,7 +155,7 @@ fn run(
 ) -> Result<Value, Errors> {
     let (program, checked) = check(source, env)?;
     diagnose(checked.errors, checked.warnings)?;
-    let bytecode = compiler::compile(&program, scope);
+    let bytecode = compiler::compile(&program, &checked.fields, scope);
     let value = vm.run(&bytecode).map_err(|e| e.to_string())?;
     *env = checked.env;
     *scope = bytecode.scope;

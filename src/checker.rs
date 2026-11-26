@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::ast::{
@@ -55,6 +56,7 @@ pub enum CheckErrorKind {
         field: String,
         name: String,
     },
+    NoFields(Type),
 }
 
 impl CheckErrorKind {
@@ -108,6 +110,7 @@ impl fmt::Display for CheckErrorKind {
             CheckErrorKind::UnknownField { field, name } => {
                 write!(f, "unknown field {field} in {name}")
             }
+            CheckErrorKind::NoFields(ty) => write!(f, "{ty} has no fields"),
         }
     }
 }
@@ -195,11 +198,16 @@ impl Local {
     }
 }
 
+// The place of each field read in its struct, by the position of the field
+// name. Only the checker knows which struct `p` in `p.x` is.
+pub type Fields = HashMap<Pos, usize>;
+
 #[derive(Debug)]
 pub struct Checked {
     pub env: Env,
     pub errors: Vec<CheckError>,
     pub warnings: Vec<Warning>,
+    pub fields: Fields,
 }
 
 pub fn check(program: &Program, env: &Env) -> Checked {
@@ -239,6 +247,7 @@ pub fn check(program: &Program, env: &Env) -> Checked {
         locals,
         mut errors,
         warnings,
+        fields,
         ..
     } = checker;
     errors.sort_by_key(|e| e.pos);
@@ -250,6 +259,7 @@ pub fn check(program: &Program, env: &Env) -> Checked {
         },
         errors,
         warnings,
+        fields,
     }
 }
 
@@ -420,6 +430,7 @@ struct Checker<'a> {
     diverges: bool,
     errors: Vec<CheckError>,
     warnings: Vec<Warning>,
+    fields: Fields,
 }
 
 impl<'a> Checker<'a> {
@@ -437,6 +448,7 @@ impl<'a> Checker<'a> {
             diverges: false,
             errors: Vec::new(),
             warnings: Vec::new(),
+            fields: Fields::new(),
         }
     }
 
@@ -477,6 +489,7 @@ impl<'a> Checker<'a> {
         body.end_scope(0);
         self.errors.extend(body.errors);
         self.warnings.extend(body.warnings);
+        self.fields.extend(body.fields);
     }
 
     fn stmts(&mut self, stmts: &[Stmt]) {
@@ -810,11 +823,13 @@ impl<'a> Checker<'a> {
             ty = match (ty, step) {
                 (Type::Array(element), Access::Index(_)) => *element,
                 (ty @ (Type::Str | Type::Array(_)), Access::Slice { .. }) => ty,
+                (Type::Struct(name), Access::Field(field)) => self.field(&name, field, *step_pos),
                 (ty @ (Type::Error | Type::Never), _) => ty,
                 (other, Access::Index(_)) => self.error(CheckErrorKind::NotIndexable(other), pos),
                 (other, Access::Slice { .. }) => {
                     self.error(CheckErrorKind::NotSliceable(other), pos)
                 }
+                (other, Access::Field(_)) => self.error(CheckErrorKind::NoFields(other), *step_pos),
             };
             for bound in step.exprs() {
                 let found = self.expr(bound);
@@ -823,6 +838,23 @@ impl<'a> Checker<'a> {
             pos = *step_pos;
         }
         ty
+    }
+
+    fn field(&mut self, name: &str, field: &str, pos: Pos) -> Type {
+        let structs = self.structs;
+        let info = structs
+            .iter()
+            .find(|s| s.name == name)
+            .expect("a struct type names a declared struct");
+        let Some(place) = info.fields.iter().position(|(n, _)| n == field) else {
+            let kind = CheckErrorKind::UnknownField {
+                field: field.to_string(),
+                name: name.to_string(),
+            };
+            return self.error(kind, pos);
+        };
+        self.fields.insert(pos, place);
+        info.fields[place].1.clone()
     }
 
     // The type of a variable, possibly indexed, that is about to change.
@@ -1027,6 +1059,10 @@ mod tests {
             "struct P { x: int } fn f(p: P) -> [P] { [p, P { x: 1 }] } f(P { x: 0 })",
             "struct E {} let e: E = E {}; if e == (E {}) { print(e); }",
             "struct A { b: B } struct B { f: fn(A) -> A } fn g(a: A) -> A { a } A { b: B { f: g } }",
+            "struct P { x: int, kids: [P] } let p = P { x: 1, kids: [] };
+             p.x + len(p.kids) + P { x: 2, kids: [p] }.kids[0].x",
+            r#"struct S { name: str } fn f(s: S) -> str { s.name[1..] } f(S { name: "ab" })"#,
+            "struct P { f: fn(int) -> int } fn g(n: int) -> int { n } let f = P { f: g }.f; f(1)",
         ] {
             assert_eq!(check_program(input).errors, [], "{input}");
         }
@@ -1680,6 +1716,24 @@ mod tests {
         assert_eq!(
             errors("struct P {} P {} < P {}"),
             ["1:13: expected int, found P", "1:20: expected int, found P"]
+        );
+    }
+
+    #[test]
+    fn field_errors() {
+        assert_eq!(
+            errors("struct P { x: int } let p = P { x: 1 }; p.y + p.x.z"),
+            ["1:43: unknown field y in P", "1:51: int has no fields"]
+        );
+        assert_eq!(error("[1].x"), "1:5: [int] has no fields");
+        assert_eq!(error("q.x"), "1:1: undefined variable: q");
+        assert_eq!(
+            error("struct P { x: int } let s: str = P { x: 1 }.x; s"),
+            "1:45: expected str, found int"
+        );
+        assert_eq!(
+            error("struct P { a: [int] } let mut p = P { a: [] }; push(p.a, 1); p"),
+            "1:55: can only push to a variable or an element of one"
         );
     }
 }

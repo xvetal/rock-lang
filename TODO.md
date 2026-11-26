@@ -24,3 +24,4 @@
 
 ## Methods
 - [ ] Method syntax such as `a.push(1)` and `a.len()`, together with structs
+- [ ] Calling a function in a field, `p.f(1)`, and calling any expression, such as `fs[0](1)`

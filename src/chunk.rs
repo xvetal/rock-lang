@@ -34,6 +34,8 @@ pub enum Op {
         fields: Vec<usize>,
     },
     Index,
+    // Takes the field at this place in the struct.
+    Field(usize),
     // Each flag tells whether that bound is on the stack.
     Slice {
         start: bool,
