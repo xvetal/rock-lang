@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::ast::{
-    BinaryOp, Block, Expr, ExprKind, FnDecl, Index, Iterable, LogicalOp, Program, Stmt,
+    Access, BinaryOp, Block, Expr, ExprKind, FnDecl, Iterable, LogicalOp, Program, Stmt,
 };
 use crate::chunk::{Bytecode, Chunk, Function, Op};
 use crate::lexer::Pos;
@@ -111,24 +111,24 @@ impl<'a> Compiler<'a> {
                 }
                 Stmt::Assign {
                     name,
-                    indexes,
+                    path,
                     op: Some((op, op_pos)),
                     value,
                     pos,
-                } => self.compound(name, indexes, op, *op_pos, value, *pos),
+                } => self.compound(name, path, op, *op_pos, value, *pos),
                 Stmt::Assign {
                     name,
-                    indexes,
+                    path,
                     op: None,
                     value,
                     pos,
                 } => {
                     self.expr(value);
                     self.temps += 1;
-                    self.place_indexes(indexes);
-                    self.temps -= indexes.len() + 1;
+                    self.place_indexes(path);
+                    self.temps -= path.len() + 1;
                     let slot = self.local(name).expect(RESOLVED);
-                    let op = match indexes.len() {
+                    let op = match path.len() {
                         0 => Op::SetLocal(slot),
                         depth => Op::SetIndex { slot, depth },
                     };
@@ -248,17 +248,17 @@ impl<'a> Compiler<'a> {
                 };
                 self.chunk.emit(op, pos);
             }
-            ExprKind::Index { target, indexes } => {
+            ExprKind::Access { target, path } => {
                 self.expr(target);
-                for (pos, index) in indexes {
+                for (pos, step) in path {
                     self.temps += 1;
-                    let op = match index {
-                        Index::At(index) => {
+                    let op = match step {
+                        Access::Index(index) => {
                             self.expr(index);
                             Op::Index
                         }
-                        Index::Slice { start, end } => {
-                            let bounds: Vec<&Expr> = index.exprs().collect();
+                        Access::Slice { start, end } => {
+                            let bounds: Vec<&Expr> = step.exprs().collect();
                             for bound in &bounds {
                                 self.expr(bound);
                                 self.temps += 1;
@@ -442,18 +442,18 @@ impl<'a> Compiler<'a> {
         let place = target
             .as_place()
             .expect("the checker only lets push change a variable");
-        self.place_indexes(place.indexes);
+        self.place_indexes(place.path);
         self.expr(value);
-        let depth = place.indexes.len();
+        let depth = place.path.len();
         self.temps -= depth;
         let slot = self.local(place.name).expect(RESOLVED);
         self.chunk.emit(Op::Push { slot, depth }, pos);
     }
 
     // Leaves the indexes on the stack, counted in `temps`.
-    fn place_indexes(&mut self, indexes: &[(Pos, Index)]) {
-        for (_, index) in indexes {
-            let Index::At(index) = index else {
+    fn place_indexes(&mut self, path: &[(Pos, Access)]) {
+        for (_, step) in path {
+            let Access::Index(index) = step else {
                 panic!("the checker rejects assignment to a slice");
             };
             self.expr(index);
@@ -467,24 +467,24 @@ impl<'a> Compiler<'a> {
     fn compound(
         &mut self,
         name: &str,
-        indexes: &[(Pos, Index)],
+        path: &[(Pos, Access)],
         op: &BinaryOp,
         op_pos: Pos,
         value: &Expr,
         pos: Pos,
     ) {
-        for (bracket, index) in indexes {
-            let Index::At(index) = index else {
+        for (bracket, step) in path {
+            let Access::Index(index) = step else {
                 panic!("the checker rejects assignment to a slice");
             };
             self.expr(index);
             self.chunk.emit(Op::DefineLocal, *bracket);
             self.locals.push(String::new());
         }
-        let first = self.locals.len() - indexes.len();
+        let first = self.locals.len() - path.len();
         let slot = self.local(name).expect(RESOLVED);
         self.chunk.emit(Op::GetLocal(slot), pos);
-        for (i, (bracket, _)) in indexes.iter().enumerate() {
+        for (i, (bracket, _)) in path.iter().enumerate() {
             self.chunk.emit(Op::GetLocal(first + i), *bracket);
             self.chunk.emit(Op::Index, *bracket);
         }
@@ -492,14 +492,14 @@ impl<'a> Compiler<'a> {
         self.expr(value);
         self.temps -= 1;
         self.chunk.emit(Op::Binary(op.clone()), op_pos);
-        if indexes.is_empty() {
+        if path.is_empty() {
             self.chunk.emit(Op::SetLocal(slot), pos);
             return;
         }
-        for i in 0..indexes.len() {
+        for i in 0..path.len() {
             self.chunk.emit(Op::GetLocal(first + i), pos);
         }
-        let depth = indexes.len();
+        let depth = path.len();
         self.chunk.emit(Op::SetIndex { slot, depth }, pos);
         self.chunk.emit(Op::DropLocals(depth), pos);
         self.locals.truncate(first);

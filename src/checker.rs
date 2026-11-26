@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::ast::{
-    BinaryOp, Block, Expr, ExprKind, FnDecl, Index, Iterable, Program, Stmt, Type, UnaryOp,
+    Access, BinaryOp, Block, Expr, ExprKind, FnDecl, Iterable, Program, Stmt, Type, UnaryOp,
 };
 use crate::lexer::Pos;
 
@@ -505,23 +505,23 @@ impl<'a> Checker<'a> {
                 }
                 Stmt::Assign {
                     name,
-                    indexes,
+                    path,
                     op: None,
                     value,
                     pos,
                 } => {
                     let found = self.expr(value);
-                    let ty = self.place(name, indexes, *pos);
+                    let ty = self.place(name, path, *pos);
                     self.expect(&ty, &found, value_pos(value));
                 }
                 Stmt::Assign {
                     name,
-                    indexes,
+                    path,
                     op: Some((op, _)),
                     value,
                     pos,
                 } => {
-                    let ty = self.place(name, indexes, *pos);
+                    let ty = self.place(name, path, *pos);
                     self.compound(op, ty, *pos, value);
                 }
                 Stmt::Expr(expr) => {
@@ -622,9 +622,9 @@ impl<'a> Checker<'a> {
                 Type::Array(Box::new(ty))
             }
             ExprKind::Struct { name, fields } => self.struct_literal(name, fields, pos),
-            ExprKind::Index { target, indexes } => {
+            ExprKind::Access { target, path } => {
                 let ty = self.expr(target);
-                self.index(ty, value_pos(target), indexes)
+                self.access(ty, value_pos(target), path)
             }
             ExprKind::Block(block) => self.block(block),
             ExprKind::If {
@@ -805,29 +805,29 @@ impl<'a> Checker<'a> {
 
     // `pos` locates the value of type `ty`, so an error can point at the
     // part of `a[i][j]` that is not an array.
-    fn index(&mut self, mut ty: Type, mut pos: Pos, indexes: &[(Pos, Index)]) -> Type {
-        for (bracket, index) in indexes {
-            ty = match (ty, index) {
-                (Type::Array(element), Index::At(_)) => *element,
-                (ty @ (Type::Str | Type::Array(_)), Index::Slice { .. }) => ty,
+    fn access(&mut self, mut ty: Type, mut pos: Pos, path: &[(Pos, Access)]) -> Type {
+        for (step_pos, step) in path {
+            ty = match (ty, step) {
+                (Type::Array(element), Access::Index(_)) => *element,
+                (ty @ (Type::Str | Type::Array(_)), Access::Slice { .. }) => ty,
                 (ty @ (Type::Error | Type::Never), _) => ty,
-                (other, Index::At(_)) => self.error(CheckErrorKind::NotIndexable(other), pos),
-                (other, Index::Slice { .. }) => {
+                (other, Access::Index(_)) => self.error(CheckErrorKind::NotIndexable(other), pos),
+                (other, Access::Slice { .. }) => {
                     self.error(CheckErrorKind::NotSliceable(other), pos)
                 }
             };
-            for bound in index.exprs() {
+            for bound in step.exprs() {
                 let found = self.expr(bound);
                 self.expect(&Type::Int, &found, value_pos(bound));
             }
-            pos = *bracket;
+            pos = *step_pos;
         }
         ty
     }
 
     // The type of a variable, possibly indexed, that is about to change.
     // A slice is a new value, so a change to it would be lost.
-    fn place(&mut self, name: &str, indexes: &[(Pos, Index)], pos: Pos) -> Type {
+    fn place(&mut self, name: &str, path: &[(Pos, Access)], pos: Pos) -> Type {
         let ty = match self.local(name) {
             Some(local) => {
                 local.assigned = true;
@@ -839,13 +839,13 @@ impl<'a> Checker<'a> {
             }
             None => self.error(CheckErrorKind::UndefinedVariable(name.to_string()), pos),
         };
-        let slice = indexes
+        let slice = path
             .iter()
-            .find(|(_, index)| matches!(index, Index::Slice { .. }));
+            .find(|(_, step)| matches!(step, Access::Slice { .. }));
         if let Some((bracket, _)) = slice {
             self.error(CheckErrorKind::AssignToSlice, *bracket);
         }
-        self.index(ty, pos, indexes)
+        self.access(ty, pos, path)
     }
 
     // The type of the loop variable.
@@ -921,7 +921,7 @@ impl<'a> Checker<'a> {
             self.args(args);
             return Type::Unit;
         };
-        let ty = self.place(place.name, place.indexes, place.pos);
+        let ty = self.place(place.name, place.path, place.pos);
         let found = self.expr(value);
         match ty {
             Type::Array(element) => self.expect(&element, &found, value_pos(value)),

@@ -69,9 +69,9 @@ pub enum ExprKind {
     },
     // `a[i][j]` is one node, for the same reason as `Binary`. Each index keeps
     // the position of its `[`.
-    Index {
+    Access {
         target: Box<Expr>,
-        indexes: Vec<(Pos, Index)>,
+        path: Vec<(Pos, Access)>,
     },
     Block(Block),
     If {
@@ -109,8 +109,8 @@ pub enum Iterable {
 
 // What stands between the brackets of `a[...]`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Index {
-    At(Expr),
+pub enum Access {
+    Index(Expr),
     // `a[start..end]`, where either bound may be left out.
     Slice {
         start: Option<Expr>,
@@ -118,11 +118,11 @@ pub enum Index {
     },
 }
 
-impl Index {
+impl Access {
     pub fn exprs(&self) -> impl Iterator<Item = &Expr> {
         let (first, second) = match self {
-            Index::At(index) => (Some(index), None),
-            Index::Slice { start, end } => (start.as_ref(), end.as_ref()),
+            Access::Index(index) => (Some(index), None),
+            Access::Slice { start, end } => (start.as_ref(), end.as_ref()),
         };
         first.into_iter().chain(second)
     }
@@ -132,20 +132,20 @@ impl Index {
 pub struct Place<'a> {
     pub name: &'a str,
     pub pos: Pos,
-    pub indexes: &'a [(Pos, Index)],
+    pub path: &'a [(Pos, Access)],
 }
 
 impl Expr {
     pub fn as_place(&self) -> Option<Place<'_>> {
-        let (var, indexes) = match &self.kind {
-            ExprKind::Index { target, indexes } => (&**target, &indexes[..]),
+        let (var, path) = match &self.kind {
+            ExprKind::Access { target, path } => (&**target, &path[..]),
             _ => (self, &[][..]),
         };
         match &var.kind {
             ExprKind::Var(name) => Some(Place {
                 name,
                 pos: var.pos,
-                indexes,
+                path,
             }),
             _ => None,
         }
@@ -254,7 +254,7 @@ pub enum Stmt {
     },
     Assign {
         name: String,
-        indexes: Vec<(Pos, Index)>,
+        path: Vec<(Pos, Access)>,
         // The operator of a compound assignment such as `x += 1`.
         op: Option<(BinaryOp, Pos)>,
         value: Expr,

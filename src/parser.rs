@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::ast::{
-    BinaryOp, Block, Expr, ExprKind, Field, FnDecl, Index, Iterable, LogicalOp, Param, Program,
+    Access, BinaryOp, Block, Expr, ExprKind, Field, FnDecl, Iterable, LogicalOp, Param, Program,
     Stmt, StructDecl, Type, UnaryOp,
 };
 use crate::lexer::{Located, Pos, Token};
@@ -356,8 +356,8 @@ impl Parser {
             Token::PercentEq => Some(BinaryOp::Rem),
             _ => None,
         };
-        let (var, indexes) = match target.kind {
-            ExprKind::Index { target, indexes } => (*target, indexes),
+        let (var, path) = match target.kind {
+            ExprKind::Access { target, path } => (*target, path),
             _ => (target, Vec::new()),
         };
         let ExprKind::Var(name) = var.kind else {
@@ -367,7 +367,7 @@ impl Parser {
         self.expect(Token::Semicolon, "';'")?;
         Ok(Stmt::Assign {
             name,
-            indexes,
+            path,
             op: op.map(|op| (op, op_pos)),
             value,
             pos: var.pos,
@@ -495,30 +495,30 @@ impl Parser {
         if block_like {
             return Ok(target);
         }
-        let mut indexes = Vec::new();
+        let mut path = Vec::new();
         while self.peek() == &Token::LBracket {
             let pos = self.peek_pos();
             self.advance();
-            indexes.push((pos, self.with_struct_literals(true, Self::index)?));
+            path.push((pos, self.with_struct_literals(true, Self::index)?));
             self.expect(Token::RBracket, "']'")?;
         }
-        Ok(match indexes.last() {
-            Some(&(pos, _)) => ExprKind::Index {
+        Ok(match path.last() {
+            Some(&(pos, _)) => ExprKind::Access {
                 target: Box::new(target),
-                indexes,
+                path,
             }
             .at(pos),
             None => target,
         })
     }
 
-    fn index(&mut self) -> Result<Index, ParseError> {
+    fn index(&mut self) -> Result<Access, ParseError> {
         let start = match self.peek() {
             Token::DotDot => None,
             _ => {
                 let index = self.expr()?;
                 if self.peek() != &Token::DotDot {
-                    return Ok(Index::At(index));
+                    return Ok(Access::Index(index));
                 }
                 Some(index)
             }
@@ -528,7 +528,7 @@ impl Parser {
             Token::RBracket => None,
             _ => Some(self.expr()?),
         };
-        Ok(Index::Slice { start, end })
+        Ok(Access::Slice { start, end })
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
@@ -855,9 +855,9 @@ mod tests {
                     strip(value);
                 }
             }
-            ExprKind::Index { target, indexes } => {
+            ExprKind::Access { target, path } => {
                 strip(target);
-                strip_indexes(indexes);
+                strip_path(path);
             }
             ExprKind::Binary { left, rest } => {
                 strip(left);
@@ -907,12 +907,12 @@ mod tests {
         }
     }
 
-    fn strip_indexes(indexes: &mut [(Pos, Index)]) {
-        for (pos, index) in indexes {
+    fn strip_path(path: &mut [(Pos, Access)]) {
+        for (pos, step) in path {
             *pos = NO_POS;
-            match index {
-                Index::At(index) => strip(index),
-                Index::Slice { start, end } => start.iter_mut().chain(end).for_each(strip),
+            match step {
+                Access::Index(index) => strip(index),
+                Access::Slice { start, end } => start.iter_mut().chain(end).for_each(strip),
             }
         }
     }
@@ -930,7 +930,7 @@ mod tests {
                 strip(value);
             }
             Stmt::Assign {
-                indexes,
+                path,
                 op,
                 value,
                 pos,
@@ -940,7 +940,7 @@ mod tests {
                 if let Some((_, pos)) = op {
                     *pos = NO_POS;
                 }
-                strip_indexes(indexes);
+                strip_path(path);
                 strip(value);
             }
             Stmt::Fn(decl) => {
@@ -1033,19 +1033,19 @@ mod tests {
     }
 
     fn index(target: Expr, indexes: Vec<Expr>) -> Expr {
-        indexed(target, indexes.into_iter().map(Index::At).collect())
+        accessed(target, indexes.into_iter().map(Access::Index).collect())
     }
 
-    fn indexed(target: Expr, indexes: Vec<Index>) -> Expr {
-        ExprKind::Index {
+    fn accessed(target: Expr, path: Vec<Access>) -> Expr {
+        ExprKind::Access {
             target: Box::new(target),
-            indexes: indexes.into_iter().map(|i| (NO_POS, i)).collect(),
+            path: path.into_iter().map(|step| (NO_POS, step)).collect(),
         }
         .at(NO_POS)
     }
 
-    fn slice(start: Option<Expr>, end: Option<Expr>) -> Index {
-        Index::Slice { start, end }
+    fn slice(start: Option<Expr>, end: Option<Expr>) -> Access {
+        Access::Slice { start, end }
     }
 
     fn neg(operand: Expr) -> Expr {
@@ -1332,31 +1332,31 @@ mod tests {
     fn slicing() {
         assert_eq!(
             parse("s[1..3]"),
-            Ok(indexed(var("s"), vec![slice(Some(int(1)), Some(int(3)))]))
+            Ok(accessed(var("s"), vec![slice(Some(int(1)), Some(int(3)))]))
         );
         assert_eq!(
             parse("s[i + 1..]"),
-            Ok(indexed(
+            Ok(accessed(
                 var("s"),
                 vec![slice(Some(bin(Add, var("i"), int(1))), None)]
             ))
         );
         assert_eq!(
             parse("s[..len(s)]"),
-            Ok(indexed(
+            Ok(accessed(
                 var("s"),
                 vec![slice(None, Some(call("len", vec![var("s")])))]
             ))
         );
         assert_eq!(
             parse("s[..]"),
-            Ok(indexed(var("s"), vec![slice(None, None)]))
+            Ok(accessed(var("s"), vec![slice(None, None)]))
         );
         assert_eq!(
             parse("a[1..][0]"),
-            Ok(indexed(
+            Ok(accessed(
                 var("a"),
-                vec![slice(Some(int(1)), None), Index::At(int(0))]
+                vec![slice(Some(int(1)), None), Access::Index(int(0))]
             ))
         );
     }
@@ -1368,7 +1368,7 @@ mod tests {
             Ok(Program {
                 stmts: vec![Stmt::Assign {
                     name: "s".to_string(),
-                    indexes: vec![(NO_POS, slice(Some(int(1)), None))],
+                    path: vec![(NO_POS, slice(Some(int(1)), None))],
                     op: None,
                     value: var("t"),
                     pos: NO_POS
@@ -1639,7 +1639,7 @@ mod tests {
             Ok(Program {
                 stmts: vec![Stmt::Assign {
                     name: "x".to_string(),
-                    indexes: vec![],
+                    path: vec![],
                     op: None,
                     value: bin(Add, var("x"), int(1)),
                     pos: NO_POS
@@ -1657,7 +1657,10 @@ mod tests {
             Ok(Program {
                 stmts: vec![Stmt::Assign {
                     name: "a".to_string(),
-                    indexes: vec![(NO_POS, Index::At(int(0))), (NO_POS, Index::At(var("i")))],
+                    path: vec![
+                        (NO_POS, Access::Index(int(0))),
+                        (NO_POS, Access::Index(var("i")))
+                    ],
                     op: None,
                     value: int(1),
                     pos: NO_POS
@@ -1676,14 +1679,14 @@ mod tests {
                 stmts: vec![
                     Stmt::Assign {
                         name: "x".to_string(),
-                        indexes: vec![],
+                        path: vec![],
                         op: Some((Sub, NO_POS)),
                         value: int(1),
                         pos: NO_POS
                     },
                     Stmt::Assign {
                         name: "a".to_string(),
-                        indexes: vec![(NO_POS, Index::At(var("i")))],
+                        path: vec![(NO_POS, Access::Index(var("i")))],
                         op: Some((Rem, NO_POS)),
                         value: bin(Add, var("y"), int(2)),
                         pos: NO_POS
@@ -1768,7 +1771,7 @@ mod tests {
             parse("for x in f(a)[1..] {}"),
             Ok(for_in(
                 "x",
-                indexed(call("f", vec![var("a")]), vec![slice(Some(int(1)), None)]),
+                accessed(call("f", vec![var("a")]), vec![slice(Some(int(1)), None)]),
                 block(vec![], None)
             ))
         );
@@ -2090,10 +2093,10 @@ mod tests {
     fn index_is_located_at_its_bracket() {
         let expr = parse_located("a[0]\n  [1]");
         assert_eq!(expr.pos, Pos { line: 2, col: 3 });
-        let ExprKind::Index { indexes, .. } = expr.kind else {
+        let ExprKind::Access { path, .. } = expr.kind else {
             panic!("expected an index expression");
         };
-        let positions: Vec<Pos> = indexes.iter().map(|(pos, _)| *pos).collect();
+        let positions: Vec<Pos> = path.iter().map(|(pos, _)| *pos).collect();
         assert_eq!(
             positions,
             [Pos { line: 1, col: 2 }, Pos { line: 2, col: 3 }]
